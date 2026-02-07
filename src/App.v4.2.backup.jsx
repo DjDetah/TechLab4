@@ -4,10 +4,10 @@ import {
   ChevronLeft, ChevronRight, X, Phone, Mail, MapPin,
   Camera, Save, Trash2, Clock, CheckCircle, AlertTriangle,
   Package, Truck, Wrench, Users, Activity, Settings, Link,
-  Download, ExternalLink, Filter, Calendar, MoreVertical, BrainCircuit, LayoutGrid, Minus, PlusCircle, PlayCircle, PauseCircle, Printer, Nfc, Zap, XCircle
+  Download, ExternalLink, Filter, Calendar, MoreVertical, BrainCircuit, LayoutGrid, Minus, PlusCircle, PlayCircle, PauseCircle, Printer, Nfc
 } from 'lucide-react';
 import {
-  PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList
+  PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import QRCode from "react-qr-code";
 
@@ -65,7 +65,8 @@ const ALL_STATUSES = Object.keys(STATUS_FLOW);
 const INITIAL_SETTINGS = {
   categories: ['Laptop', 'Desktop', 'Server', 'Mobile', 'Tablet'],
   models: ['ThinkPad X1', 'MacBook Pro', 'Dell XPS', 'iPhone 15', 'Galaxy S24'],
-
+  categories: ['Laptop', 'Desktop', 'Server', 'Mobile', 'Tablet'],
+  models: ['ThinkPad X1', 'MacBook Pro', 'Dell XPS', 'iPhone 15', 'Galaxy S24'],
   suppliers_inbound: ['TechParts Inc.', 'Global Components', 'ScreenFix'],
   suppliers_outbound: ['Apple Support', 'Dell Service', 'Laboratorio Partner'],
   spareParts: ['Schermo', 'Batteria', 'Tastiera', 'Trackpad', 'Ventola', 'Scheda Madre', 'Altoparlanti', 'Scocca', 'Connettore Ricarica'],
@@ -733,7 +734,7 @@ const MainContent = ({ slaConfig, updateSLA, assignRules, updateAssignRules, mas
 
   if (view === 'team') return <TeamManagementView />;
   if (view === 'logistics') return <div className="p-10 text-center text-gray-400">Modulo Logistica in arrivo</div>;
-  if (view === 'kpi') return <KPIView masterData={masterData} />;
+  if (view === 'kpi') return <KPIView />;
   if (view === 'settings') return (
     <SettingsView
       slaConfig={slaConfig} onUpdate={updateSLA}
@@ -1172,8 +1173,10 @@ function PartCategorySettings({ categories, onUpdate }) {
 // --- FEATURES: REPAIR DETAIL ---
 function RepairDetailView({ repair: initialRepair, onClose, load, masterData, onUpdateMasterData }) {
   const { profile } = useContext(AuthContext);
+  console.log("RepairDetailView mounted with:", initialRepair);
   // Use local state for optimistic UI updates
   const [repair, setRepair] = useState(initialRepair);
+  console.log("RepairDetailView local state:", repair);
 
   // Sync local state when prop updates (e.g. after parent reload)
   useEffect(() => {
@@ -1301,11 +1304,6 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
               <span>ID: {repair.id}</span>
               {repair.tag && <span className="text-indigo-600 font-bold">TAG: {repair.tag}</span>}
               <span className="hidden md:inline">{repair.category}</span>
-              {repair.hasPowerSupply && (
-                <span className="flex items-center gap-1 text-xs font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 ml-2">
-                  <Zap size={10} className="fill-amber-600" /> Alimentatore
-                </span>
-              )}
             </p>
           </div>
         </div>
@@ -1348,7 +1346,7 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
               <h3 className="text-xs font-bold uppercase text-gray-400 mb-4">Timeline</h3>
               {(() => {
                 const events = [
-                  { label: "Ingresso", date: repair.dateIn, highlight: true },
+                  { label: "Ingresso", date: repair.dateIn },
                   { label: "Inizio Lavorazione", date: repair.dateStart },
                   { label: "Attesa Parti", date: repair.datePartsMissing, highlight: true },
                   { label: "Ripresa Lavorazione", date: repair.dateResume },
@@ -1469,18 +1467,10 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
 
             {/* Priority Toggle for Logistics/Manager */}
             {canEditPriority && (
-              <div className={`p-4 rounded-xl border ${repair.status === 'Annullato' ? 'bg-gray-100 border-gray-200 opacity-50' : 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800'}`}>
+              <div className="p-4 bg-orange-50 dark:bg-orange-900/20 rounded-xl border border-orange-200 dark:border-orange-800">
                 <h3 className="text-xs font-bold uppercase text-orange-800 dark:text-orange-300 mb-2">Gestione Priorità</h3>
-                <label className={`flex items-center gap-3 ${repair.status === 'Annullato' ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
-                  <input
-                    type="checkbox"
-                    checked={repair.priorityClaim || false}
-                    onChange={(e) => {
-                      if (repair.status !== 'Annullato') togglePriority(e);
-                    }}
-                    disabled={repair.status === 'Annullato'}
-                    className="w-5 h-5 text-red-600 rounded disabled:text-gray-400"
-                  />
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input type="checkbox" checked={repair.priorityClaim || false} onChange={togglePriority} className="w-5 h-5 text-red-600 rounded" />
                   <span className="font-bold text-sm text-gray-700 dark:text-gray-200">Segnala come URGENTE</span>
                 </label>
               </div>
@@ -1571,20 +1561,6 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
 
             {/* ACTIONS */}
             <div className="grid grid-cols-2 gap-4 border-t pt-6 dark:border-slate-700">
-              {(repair.status === 'Ingresso' || repair.status === 'Diagnosi') && (
-                <div className="col-span-2 flex justify-end mb-2">
-                  <button
-                    onClick={() => {
-                      if (confirm('Sei sicuro di voler ANNULLARE questa riparazione?')) {
-                        handleStatusUpdate('Annullato');
-                      }
-                    }}
-                    className="text-xs text-red-400 hover:text-red-600 hover:underline px-2 py-1"
-                  >
-                    Annulla Lavorazione
-                  </button>
-                </div>
-              )}
               {repair.status === 'Ingresso' && <ActionButton label="Avvia Diagnosi" onClick={() => handleStatusUpdate('Diagnosi')} primary />}
               {repair.status === 'Diagnosi' && <ActionButton label="Inizia Lavorazione" onClick={() => handleStatusUpdate('In Lavorazione')} primary />}
 
@@ -1625,14 +1601,6 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
                       className="px-6 py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Conferma & Chiudi Riparazione
-                    </button>
-                  </div>
-                  <div className="mt-3 text-right">
-                    <button
-                      onClick={() => handleStatusUpdate('In Lavorazione', { staging: null })}
-                      className="text-xs text-slate-500 hover:text-indigo-600 hover:underline"
-                    >
-                      Torna in Lavorazione
                     </button>
                   </div>
                 </div>
@@ -1793,16 +1761,16 @@ const StatusCard = ({ label, count, variant, icon: Icon, onClick, isActive }) =>
   return (
     <div
       onClick={onClick}
-      className={`bg-white dark:bg-slate-800 p-3 rounded-xl border shadow-sm flex items-center justify-between cursor-pointer transition-all hover:shadow-md active:scale-95
+      className={`bg-white dark:bg-slate-800 p-4 rounded-xl border shadow-sm flex items-center justify-between cursor-pointer transition-all hover:shadow-md active:scale-95
         ${isActive ? 'ring-2 ring-indigo-500 border-indigo-500 dark:border-indigo-400' : 'border-gray-200 dark:border-slate-700'}
       `}
     >
-      <div className="min-w-0">
-        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider truncate">{label}</p>
-        <p className="text-xl font-bold text-gray-800 dark:text-white mt-0.5">{count}</p>
+      <div>
+        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">{label}</p>
+        <p className="text-2xl font-bold text-gray-800 dark:text-white mt-1">{count}</p>
       </div>
-      <div className={`p-2 rounded-lg ${colorClass} shrink-0 ml-2`}>
-        <Icon size={20} />
+      <div className={`p-3 rounded-lg ${colorClass}`}>
+        <Icon size={24} />
       </div>
     </div>
   );
@@ -1830,17 +1798,11 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
     if (statusFilter) {
       if (statusFilter === 'URGENT') {
         if (!r.priorityClaim) return false;
-      } else if (statusFilter === 'TODAY') {
-        // Filter for Completed Today
-        if (!r.dateOut || new Date(r.dateOut).toDateString() !== new Date().toDateString()) return false;
       } else if (Array.isArray(statusFilter)) {
         if (!statusFilter.includes(r.status)) return false;
       } else {
         if (r.status !== statusFilter) return false;
       }
-    } else {
-      // Default: Hide 'Annullato' unless explicitly filtered
-      if (r.status === 'Annullato') return false;
     }
 
     // 2. Search Text
@@ -1861,15 +1823,11 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
   const stats = {
     total: repairs.length,
     ingresso: repairs.filter(r => r.status === 'Ingresso').length,
-    diagnosi: repairs.filter(r => r.status === 'Diagnosi').length,
-    processing: repairs.filter(r => r.status === 'In Lavorazione').length,
+    working: repairs.filter(r => r.status === 'In Lavorazione' || r.status === 'Diagnosi').length,
     parts: repairs.filter(r => r.status === 'Attesa Parti').length,
     completed: repairs.filter(r => r.status === 'Riparato').length,
     shipped: repairs.filter(r => r.status === 'Spedito').length,
-
-    urgent: repairs.filter(r => r.priorityClaim).length,
-    today: repairs.filter(r => r.dateOut && new Date(r.dateOut).toDateString() === new Date().toDateString()).length,
-    cancelled: repairs.filter(r => r.status === 'Annullato').length
+    urgent: repairs.filter(r => r.priorityClaim).length
   };
 
   return (
@@ -1877,7 +1835,7 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
 
       {/* KPI CARDS (V3 Feature) */}
       {/* KPI CARDS (V3 Feature) */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-9 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
         <StatusCard
           label="In Entrata"
           count={stats.ingresso}
@@ -1887,20 +1845,12 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
           onClick={() => setStatusFilter(statusFilter === 'Ingresso' ? null : 'Ingresso')}
         />
         <StatusCard
-          label="Diagnosi"
-          count={stats.diagnosi}
-          variant="purple"
-          icon={Activity}
-          isActive={statusFilter === 'Diagnosi'}
-          onClick={() => setStatusFilter(statusFilter === 'Diagnosi' ? null : 'Diagnosi')}
-        />
-        <StatusCard
-          label="In Lavorazione"
-          count={stats.processing}
-          variant="indigo" // Changed to indigo/amber to match flow or distinct
+          label="In Corso"
+          count={stats.working}
+          variant="indigo"
           icon={Wrench}
-          isActive={statusFilter === 'In Lavorazione'}
-          onClick={() => setStatusFilter(statusFilter === 'In Lavorazione' ? null : 'In Lavorazione')}
+          isActive={Array.isArray(statusFilter) && statusFilter.includes('In Lavorazione')}
+          onClick={() => setStatusFilter(Array.isArray(statusFilter) ? null : ['In Lavorazione', 'Diagnosi'])}
         />
         <StatusCard
           label="Attesa Parti"
@@ -1933,22 +1883,6 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
           icon={Truck}
           isActive={statusFilter === 'Spedito'}
           onClick={() => setStatusFilter(statusFilter === 'Spedito' ? null : 'Spedito')}
-        />
-        <StatusCard
-          label="Rep. Oggi"
-          count={stats.today}
-          variant="emerald"
-          icon={Zap}
-          isActive={statusFilter === 'TODAY'}
-          onClick={() => setStatusFilter(statusFilter === 'TODAY' ? null : 'TODAY')}
-        />
-        <StatusCard
-          label="Annullati"
-          count={stats.cancelled}
-          variant="red"
-          icon={XCircle}
-          isActive={statusFilter === 'Annullato'}
-          onClick={() => setStatusFilter(statusFilter === 'Annullato' ? null : 'Annullato')}
         />
       </div>
 
@@ -2047,52 +1981,48 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
 
 // --- FEATURES: INVENTORY (V4.2) ---
 function InventoryView({ masterData, onUpdateMasterData }) {
-  // Inventory State
-  // Use a derived state for parts to ensure we always write back to masterData
-  const parts = masterData?.inventory || [];
-  const updateInventory = (newInv) => onUpdateMasterData({ ...masterData, inventory: newInv });
-
+  const [parts, setParts] = useState(masterData?.inventory || []);
   const [filter, setFilter] = useState('');
   const [showAdd, setShowAdd] = useState(false);
-  const [editingId, setEditingId] = useState(null); // Track if editing
-  const [newPart, setNewPart] = useState({ name: '', quantity: 0, min_quantity: 5, category: 'General', compatibleAssetCategory: '', compatibleModelsString: '' });
+  const [newPart, setNewPart] = useState({
+    name: '', quantity: 0, min_quantity: 5,
+    category: masterData?.partCategories?.[0] || 'General',
+    compatibleAssetCategory: '',
+    compatibleModelsString: ''
+  });
+
+  // Sync internal state with props if masterData updates externally
+  useEffect(() => {
+    if (masterData?.inventory) setParts(masterData.inventory);
+  }, [masterData]);
+
+  const updateInventory = (newInv) => {
+    setParts(newInv);
+    onUpdateMasterData({ ...masterData, inventory: newInv });
+  };
 
   const handleAddPart = () => {
     if (!newPart.name) return;
-
-    // Parse compatible models string back to array if needed for storage
-    const modelsArray = newPart.compatibleModelsString
+    const compatibleModels = newPart.compatibleModelsString
       ? newPart.compatibleModelsString.split(',').map(s => s.trim()).filter(Boolean)
       : [];
 
-    const partData = {
+    const partToAdd = {
       ...newPart,
-      compatibleModels: modelsArray
+      id: Date.now().toString(),
+      compatibleModels
     };
-    // remove temp string prop
-    delete partData.compatibleModelsString;
+    delete partToAdd.compatibleModelsString; // Cleanup temp field
 
-    if (editingId) {
-      // Update existing
-      const updated = parts.map(p => p.id === editingId ? { ...partData, id: editingId } : p);
-      updateInventory(updated);
-      setEditingId(null);
-    } else {
-      // Add new
-      updateInventory([...parts, { ...partData, id: Date.now() }]);
-    }
-
-    setNewPart({ name: '', quantity: 0, min_quantity: 5, category: 'General', compatibleAssetCategory: '', compatibleModelsString: '' });
+    const newInv = [...parts, partToAdd];
+    updateInventory(newInv);
     setShowAdd(false);
-  };
-
-  const startEdit = (part) => {
     setNewPart({
-      ...part,
-      compatibleModelsString: (part.compatibleModels || []).join(', ')
+      name: '', quantity: 0, min_quantity: 5,
+      category: masterData?.partCategories?.[0] || 'General',
+      compatibleAssetCategory: '',
+      compatibleModelsString: ''
     });
-    setEditingId(part.id);
-    setShowAdd(true);
   };
 
   const updateQty = (id, delta) => {
@@ -2143,7 +2073,7 @@ function InventoryView({ masterData, onUpdateMasterData }) {
   const filtered = parts.filter(p => p.name.toLowerCase().includes(filter.toLowerCase()));
 
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-slate-800 rounded-xl shadow p-6 animate-fade-in" >
+    <div className="flex flex-col h-full bg-white dark:bg-slate-800 rounded-xl shadow p-6 animate-fade-in">
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-xl font-bold flex items-center gap-2">
           <Package className="text-indigo-600" /> Gestione Scorte & Ricambi
@@ -2152,11 +2082,7 @@ function InventoryView({ masterData, onUpdateMasterData }) {
           <button onClick={exportUsedParts} className="px-4 py-2 bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600 rounded-lg flex items-center gap-2 font-medium transition-colors" title="Scarica Report Utilizzo">
             <Download size={18} /> Export
           </button>
-          <button onClick={() => {
-            setNewPart({ name: '', quantity: 0, min_quantity: 5, category: 'General', compatibleAssetCategory: '', compatibleModelsString: '' });
-            setEditingId(null);
-            setShowAdd(true);
-          }} className="btn-primary flex items-center gap-2">
+          <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2">
             <Plus size={18} /> Aggiungi Parte
           </button>
         </div>
@@ -2189,10 +2115,9 @@ function InventoryView({ masterData, onUpdateMasterData }) {
               const isLow = part.quantity <= part.min_quantity;
               return (
                 <tr key={part.id} className={`border-b dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700/50 ${isLow ? 'bg-red-50/50 dark:bg-red-900/10' : ''}`}>
-                  <td className="p-3 font-medium flex items-center gap-2 cursor-pointer hover:text-indigo-600" onClick={() => startEdit(part)}>
+                  <td className="p-3 font-medium flex items-center gap-2">
                     {part.name}
                     {isLow && <span className="text-xs bg-red-100 text-red-600 px-1.5 rounded animate-pulse">LOW</span>}
-                    <span className="text-xs text-indigo-400 opacity-0 group-hover:opacity-100 ml-2">(Modifica)</span>
                   </td>
                   <td className="p-3 text-gray-500">{part.category}</td>
                   <td className="p-3 text-center">
@@ -2214,109 +2139,95 @@ function InventoryView({ masterData, onUpdateMasterData }) {
         </table>
       </div>
 
-      {
-        showAdd && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-            <div className="bg-white dark:bg-slate-800 p-0 rounded-2xl w-full max-w-5xl shadow-2xl animate-fade-in-up overflow-hidden flex flex-col md:flex-row h-[85vh] md:h-auto border border-gray-700/50">
-              {/* Left Col: Basic Info */}
-              <div className="p-8 md:w-1/2 space-y-5 overflow-y-auto">
-                <h3 className="font-bold text-xl mb-1 flex items-center gap-2 text-indigo-700 dark:text-indigo-400">
-                  {editingId ? <Wrench size={20} /> : <PlusCircle size={20} />}
-                  {editingId ? 'Modifica Ricambio' : 'Nuovo Ricambio'}
-                </h3>
-                <p className="text-xs text-gray-400 mb-4">{editingId ? 'Aggiorna i dettagli dello stock.' : 'Inserisci i dettagli del componente nel magazzino.'}</p>
+      {showAdd && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white dark:bg-slate-800 p-0 rounded-2xl w-full max-w-5xl shadow-2xl animate-fade-in-up overflow-hidden flex flex-col md:flex-row h-[85vh] md:h-auto border border-gray-700/50">
+            {/* Left Col: Basic Info */}
+            <div className="p-8 md:w-1/2 space-y-5 overflow-y-auto">
+              <h3 className="font-bold text-xl mb-1 flex items-center gap-2 text-indigo-700 dark:text-indigo-400"><PlusCircle size={20} /> Nuovo Ricambio</h3>
+              <p className="text-xs text-gray-400 mb-4">Inserisci i dettagli del componente nel magazzino.</p>
 
-                {editingId && (
-                  <div className="p-3 bg-orange-50 border border-orange-200 rounded-lg text-xs text-orange-800 mb-4">
-                    <strong>Attenzione:</strong> Rinominare il ricambio non aggiornerà lo storico delle riparazioni passate.
-                  </div>
-                )}
-
-                <div className="space-y-4">
+              <div className="space-y-4">
+                <div>
+                  <label className="label text-xs uppercase tracking-wider text-gray-500 font-bold mb-1">Nome Componente</label>
+                  <input type="text" className="input text-base font-bold py-2" autoFocus placeholder="Es. Display OLED 14" value={newPart.name} onChange={e => setNewPart({ ...newPart, name: e.target.value })} />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="label text-xs uppercase tracking-wider text-gray-500 font-bold mb-1">Nome Componente</label>
-                    <input type="text" className="input text-base font-bold py-2" autoFocus placeholder="Es. Display OLED 14" value={newPart.name} onChange={e => setNewPart({ ...newPart, name: e.target.value })} />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="label text-xs uppercase tracking-wider text-gray-500 font-bold mb-1">Quantità Iniziale</label>
-                      <input type="number" className="input font-mono text-sm py-2" value={newPart.quantity} onChange={e => setNewPart({ ...newPart, quantity: parseInt(e.target.value) })} />
-                    </div>
-                    <div>
-                      <label className="label text-xs uppercase tracking-wider text-gray-500 font-bold mb-1">Soglia Alert</label>
-                      <input type="number" className="input font-mono text-sm text-red-600 py-2" value={newPart.min_quantity} onChange={e => setNewPart({ ...newPart, min_quantity: parseInt(e.target.value) })} />
-                    </div>
+                    <label className="label text-xs uppercase tracking-wider text-gray-500 font-bold mb-1">Quantità Iniziale</label>
+                    <input type="number" className="input font-mono text-sm py-2" value={newPart.quantity} onChange={e => setNewPart({ ...newPart, quantity: parseInt(e.target.value) })} />
                   </div>
                   <div>
-                    <label className="label text-xs uppercase tracking-wider text-gray-500 font-bold mb-1">Categoria Ricambio</label>
-                    <select className="input text-sm py-2" value={newPart.category} onChange={e => setNewPart({ ...newPart, category: e.target.value })}>
-                      {(masterData?.partCategories || ['General']).map(c => <option key={c}>{c}</option>)}
-                    </select>
+                    <label className="label text-xs uppercase tracking-wider text-gray-500 font-bold mb-1">Soglia Alert</label>
+                    <input type="number" className="input font-mono text-sm text-red-600 py-2" value={newPart.min_quantity} onChange={e => setNewPart({ ...newPart, min_quantity: parseInt(e.target.value) })} />
                   </div>
                 </div>
-              </div>
-
-              {/* Right Col: Compatibility */}
-              <div className="p-8 md:w-1/2 bg-gray-50 dark:bg-slate-900/50 border-l border-gray-100 dark:border-slate-700 flex flex-col overflow-y-auto">
-                <h4 className="text-base font-bold text-gray-700 dark:text-gray-300 mb-4 flex items-center gap-2"><Link size={16} /> Compatibilità Asset</h4>
-
-                <div className="space-y-4 flex-1">
-                  <div>
-                    <label className="label text-xs uppercase tracking-wider text-gray-500 font-bold mb-1">Categoria Asset Correlata</label>
-                    <select className="input text-sm py-2" value={newPart.compatibleAssetCategory} onChange={e => setNewPart({ ...newPart, compatibleAssetCategory: e.target.value, compatibleModelsString: '' })}>
-                      <option value="">Universale (Tutti gli asset)</option>
-                      {(masterData?.categories || []).map(c => <option key={c}>{c}</option>)}
-                    </select>
-                    <p className="text-[10px] text-gray-400 mt-1.5">Se "Universale", il ricambio sarà visibile per qualsiasi riparazione.</p>
-                  </div>
-
-                  {newPart.compatibleAssetCategory && (
-                    <div>
-                      <label className="label text-xs uppercase tracking-wider text-gray-500 font-bold mb-1">Modelli Compatibili</label>
-                      <div className="border border-gray-200 dark:border-slate-700 rounded-lg max-h-52 overflow-y-auto p-2 bg-white dark:bg-slate-900 shadow-inner">
-                        {newPart.compatibleAssetCategory ? (
-                          (masterData?.models?.[newPart.compatibleAssetCategory] || []).length > 0 ? (
-                            (masterData.models[newPart.compatibleAssetCategory]).map(model => (
-                              <label key={model} className="flex items-center gap-2 p-1.5 hover:bg-indigo-50 dark:hover:bg-slate-800 rounded transition-colors cursor-pointer border-b border-transparent hover:border-indigo-100 last:border-0">
-                                <input
-                                  type="checkbox"
-                                  checked={newPart.compatibleModelsString?.split(',').map(s => s.trim()).includes(model)}
-                                  onChange={(e) => {
-                                    let current = newPart.compatibleModelsString ? newPart.compatibleModelsString.split(',').map(s => s.trim()).filter(Boolean) : [];
-                                    if (e.target.checked) {
-                                      current.push(model);
-                                    } else {
-                                      current = current.filter(m => m !== model);
-                                    }
-                                    setNewPart({ ...newPart, compatibleModelsString: current.join(', ') });
-                                  }}
-                                  className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-gray-300"
-                                />
-                                <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{model}</span>
-                              </label>
-                            ))
-                          ) : <p className="text-xs text-gray-400 p-2 italic text-center">Nessun modello definito.</p>
-                        ) : (
-                          <p className="text-xs text-gray-400 p-2 italic text-center">Seleziona una Categoria.</p>
-                        )}
-                      </div>
-                      <p className="text-[10px] text-gray-400 mt-1.5">* Se nessuno selezionato, vale per TUTTI i modelli della categoria.</p>
-                    </div>
-                  )}
-                </div>
-                <div className="flex gap-3 pt-6 mt-auto">
-                  <button onClick={() => setShowAdd(false)} className="flex-1 py-2.5 text-sm border border-gray-300 dark:border-slate-600 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-700 font-bold transition-colors">Annulla</button>
-                  <button onClick={handleAddPart} className="flex-1 py-2.5 text-sm bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 shadow-md shadow-indigo-200 dark:shadow-none transition-transform active:scale-95">
-                    {editingId ? 'Salva Modifiche' : 'Salva Ricambio'}
-                  </button>
+                <div>
+                  <label className="label text-xs uppercase tracking-wider text-gray-500 font-bold mb-1">Categoria Ricambio</label>
+                  <select className="input text-sm py-2" value={newPart.category} onChange={e => setNewPart({ ...newPart, category: e.target.value })}>
+                    {(masterData?.partCategories || ['General']).map(c => <option key={c}>{c}</option>)}
+                  </select>
                 </div>
               </div>
             </div>
-          </div>
 
-        )
-      }
-    </div >
+            {/* Right Col: Compatibility */}
+            <div className="p-8 md:w-1/2 bg-gray-50 dark:bg-slate-900/50 border-l border-gray-100 dark:border-slate-700 flex flex-col overflow-y-auto">
+              <h4 className="text-base font-bold text-gray-700 dark:text-gray-300 mb-4 flex items-center gap-2"><Link size={16} /> Compatibilità Asset</h4>
+
+              <div className="space-y-4 flex-1">
+                <div>
+                  <label className="label text-xs uppercase tracking-wider text-gray-500 font-bold mb-1">Categoria Asset Correlata</label>
+                  <select className="input text-sm py-2" value={newPart.compatibleAssetCategory} onChange={e => setNewPart({ ...newPart, compatibleAssetCategory: e.target.value, compatibleModelsString: '' })}>
+                    <option value="">Universale (Tutti gli asset)</option>
+                    {(masterData?.categories || []).map(c => <option key={c}>{c}</option>)}
+                  </select>
+                  <p className="text-[10px] text-gray-400 mt-1.5">Se "Universale", il ricambio sarà visibile per qualsiasi riparazione.</p>
+                </div>
+
+                {newPart.compatibleAssetCategory && (
+                  <div>
+                    <label className="label text-xs uppercase tracking-wider text-gray-500 font-bold mb-1">Modelli Compatibili</label>
+                    <div className="border border-gray-200 dark:border-slate-700 rounded-lg max-h-52 overflow-y-auto p-2 bg-white dark:bg-slate-900 shadow-inner">
+                      {newPart.compatibleAssetCategory ? (
+                        (masterData?.models?.[newPart.compatibleAssetCategory] || []).length > 0 ? (
+                          (masterData.models[newPart.compatibleAssetCategory]).map(model => (
+                            <label key={model} className="flex items-center gap-2 p-1.5 hover:bg-indigo-50 dark:hover:bg-slate-800 rounded transition-colors cursor-pointer border-b border-transparent hover:border-indigo-100 last:border-0">
+                              <input
+                                type="checkbox"
+                                checked={newPart.compatibleModelsString?.split(',').map(s => s.trim()).includes(model)}
+                                onChange={(e) => {
+                                  let current = newPart.compatibleModelsString ? newPart.compatibleModelsString.split(',').map(s => s.trim()).filter(Boolean) : [];
+                                  if (e.target.checked) {
+                                    current.push(model);
+                                  } else {
+                                    current = current.filter(m => m !== model);
+                                  }
+                                  setNewPart({ ...newPart, compatibleModelsString: current.join(', ') });
+                                }}
+                                className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-gray-300"
+                              />
+                              <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{model}</span>
+                            </label>
+                          ))
+                        ) : <p className="text-xs text-gray-400 p-2 italic text-center">Nessun modello definito.</p>
+                      ) : (
+                        <p className="text-xs text-gray-400 p-2 italic text-center">Seleziona una Categoria.</p>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-1.5">* Se nessuno selezionato, vale per TUTTI i modelli della categoria.</p>
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-3 pt-6 mt-auto">
+                <button onClick={() => setShowAdd(false)} className="flex-1 py-2.5 text-sm border border-gray-300 dark:border-slate-600 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-700 font-bold transition-colors">Annulla</button>
+                <button onClick={handleAddPart} className="flex-1 py-2.5 text-sm bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 shadow-md shadow-indigo-200 dark:shadow-none transition-transform active:scale-95">Salva Ricambio</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2330,10 +2241,10 @@ function NewRepairForm({ onCancel, onSuccess, assignRules, masterData }) {
     model: '',
     serial: '',
     supplier: '',
+    customer: '',
     faultDeclared: '',
     notes: '',
-    technician: '',
-    hasPowerSupply: false
+    technician: ''
   });
 
   // Derived state for models based on selected category
@@ -2444,12 +2355,6 @@ function NewRepairForm({ onCancel, onSuccess, assignRules, masterData }) {
               <textarea name="faultDeclared" required value={formData.faultDeclared} onChange={handleChange} rows={6} className="input" placeholder="Descrivi dettagliatamente il problema segnalato..."></textarea>
             </div>
             <div className="form-group">
-              <label className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-slate-700/50 rounded-lg border border-gray-200 dark:border-slate-700 cursor-pointer">
-                <input type="checkbox" name="hasPowerSupply" checked={formData.hasPowerSupply} onChange={handleChange} className="w-5 h-5 rounded text-indigo-600 focus:ring-indigo-500" />
-                <span className="font-bold text-gray-700 dark:text-gray-200">Alimentatore Incluso</span>
-              </label>
-            </div>
-            <div className="form-group">
               <label className="label">Note Accettazione</label>
               <textarea name="notes" value={formData.notes} onChange={handleChange} rows={4} className="input" placeholder="Eventuali danni estetici, accessori inclusi, etc."></textarea>
             </div>
@@ -2469,210 +2374,88 @@ function NewRepairForm({ onCancel, onSuccess, assignRules, masterData }) {
   );
 }
 
-// --- CUSTOM COMPONENTS ---
-const CustomTick = ({ x, y, payload, onClick }) => {
-  if (!payload || !payload.value) return null;
-  const words = payload.value.split(' ');
-  return (
-    <g transform={`translate(${x},${y + 15})`} onClick={() => onClick && onClick(payload.value)} style={{ cursor: 'pointer' }}>
-      <text x={0} y={0} dy={16} textAnchor="middle" fill="#666" className="text-[10px] hover:font-bold hover:fill-indigo-600 transition-colors">
-        {words.map((word, i) => (
-          <tspan x={0} dy={i === 0 ? 0 : 12} key={i}>
-            {word}
-          </tspan>
-        ))}
-      </text>
-    </g>
-  );
-};
-
-const ClickableTick = ({ x, y, payload, onClick }) => {
-  if (!payload || !payload.value) return null;
-  return (
-    <g transform={`translate(${x},${y})`} onClick={() => onClick && onClick(payload.value)} style={{ cursor: 'pointer' }}>
-      <text x={0} y={0} dy={16} textAnchor="middle" fill="#666" className="text-[10px] hover:font-bold hover:fill-indigo-600 transition-colors">
-        {payload.value}
-      </text>
-    </g>
-  );
-};
-
 // --- FEATURES: KPI & ANALYTICS ---
-function KPIView({ masterData }) {
-  const [filters, setFilters] = useState({ status: null, category: null, model: null, dateIn: null, dateOut: null });
+function KPIView() {
+  const [stats, setStats] = useState({ pie: [], bar: [], metrics: {} });
   const [raw, setRaw] = useState([]);
 
-  // Toggle Filters Helper
-  const toggleFilter = (type, value) => {
-    // For dates, we might want to toggle off if same value clicked
-    // But since bars and labels are separate, standard toggle logic works
-    setFilters(prev => ({
-      ...prev,
-      [type]: prev[type] === value ? null : value
-    }));
-  };
-
-  const clearFilters = () => setFilters({ status: null, category: null, model: null, dateIn: null, dateOut: null });
-
-  // Load Raw Data ONLY
   useEffect(() => {
-    service.getRepairs().then(setRaw);
-  }, []);
+    service.getRepairs().then(data => {
+      setRaw(data);
 
-  // Compute Statistics based on Filters
-  const stats = useMemo(() => {
-    if (!raw.length) return { statusData: [], bar: [], repairedBar: [], metrics: {}, categoryData: [], modelData: [] };
+      // --- 1. Charts Data ---
+      // V4.1: Dynamic Pie Chart using ALL_STATUSES
+      const pie = ALL_STATUSES.map(s => ({
+        name: s, value: data.filter(r => r.status === s).length
+      })).filter(x => x.value > 0);
 
-    // 1. Filter Data
-    const data = raw.filter(r => {
-      if (filters.status && r.status !== filters.status) return false;
-      if (filters.category && (r.category || 'Altro') !== filters.category) return false;
-      if (filters.model && (r.model || 'Sconosciuto') !== filters.model) return false;
+      const last7 = [...Array(7)].map((_, i) => {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        return d.toISOString().split('T')[0];
+      }).reverse();
 
-      // Date Filters (Exact Match on YYYY-MM-DD)
-      if (filters.dateIn) {
-        if (!r.dateIn || !r.dateIn.startsWith(filters.dateIn)) return false;
-      }
-      if (filters.dateOut) {
-        if (!r.dateOut || !r.dateOut.startsWith(filters.dateOut)) return false;
-      }
+      const bar = last7.map(date => ({
+        name: date.split('-').slice(1).join('/'),
+        count: data.filter(r => r.dateIn && r.dateIn.startsWith(date)).length
+      }));
 
-      return true;
-    });
+      // --- 2. Advanced Metrics (Time Tracking) ---
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
 
-    // 2. Metrics Helpers
-    const now = new Date();
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
+      // Helpers for metrics
+      const getDuration = (r, status) => {
+        if (!r.timeline || r.timeline.length === 0) return 0;
+        let total = 0;
+        r.timeline.forEach((entry, i) => {
+          if (entry.status === status) {
+            const start = new Date(entry.date).getTime();
+            const nextEntry = r.timeline[i + 1];
+            const end = nextEntry ? new Date(nextEntry.date).getTime() : now.getTime();
+            total += (end - start);
+          }
+        });
+        return total;
+      };
 
-    const getTime = (d) => {
-      if (!d) return 0;
-      if (typeof d?.toMillis === 'function') return d.toMillis();
-      if (typeof d?.toDate === 'function') return d.toDate().getTime();
-      return new Date(d).getTime();
-    };
+      const getTotalDuration = (r) => {
+        if (!r.dateIn) return 0;
+        const start = new Date(r.dateIn).getTime();
+        const end = r.dateOut ? new Date(r.dateOut).getTime() : now.getTime();
+        return end - start;
+      };
 
-    const getDuration = (r, status) => {
-      if (!r.timeline || r.timeline.length === 0) return 0;
-      let total = 0;
-      r.timeline.forEach((entry, i) => {
-        if (entry.status === status) {
-          const start = getTime(entry.date);
-          const nextEntry = r.timeline[i + 1];
-          const end = nextEntry ? getTime(nextEntry.date) : now.getTime();
-          total += (end - start);
-        }
+      // Filter Data by Month
+      const thisMonthData = data.filter(r => {
+        const d = new Date(r.dateIn);
+        return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
       });
-      return total;
-    };
 
-    const getTotalDuration = (r) => {
-      if (!r.dateIn) return 0;
-      const start = getTime(r.dateIn);
-      const end = r.dateOut ? getTime(r.dateOut) : now.getTime();
-      return end - start;
-    };
+      const prevMonthDate = new Date();
+      prevMonthDate.setMonth(currentMonth - 1);
+      const prevMonthData = data.filter(r => {
+        const d = new Date(r.dateIn);
+        return d.getMonth() === prevMonthDate.getMonth() && d.getFullYear() === prevMonthDate.getFullYear();
+      });
 
-    // 3. Status Distribution
-    const statusData = ALL_STATUSES.map(s => ({
-      name: s,
-      count: data.filter(r => r.status === s).length,
-      fill: STATUS_FLOW[s]?.color.includes('blue') ? '#3b82f6' :
-        STATUS_FLOW[s]?.color.includes('indigo') ? '#6366f1' :
-          STATUS_FLOW[s]?.color.includes('orange') ? '#f97316' :
-            STATUS_FLOW[s]?.color.includes('emerald') ? '#10b981' :
-              STATUS_FLOW[s]?.color.includes('red') ? '#ef4444' : '#6b7280',
-      active: filters.status === s
-    })).filter(x => x.count > 0 || x.name === filters.status);
+      const calcAvg = (dataset, fn) => {
+        if (dataset.length === 0) return 0;
+        const sum = dataset.reduce((acc, r) => acc + fn(r), 0);
+        return sum / dataset.length;
+      };
 
-    // Date Bars
-    const last7 = [...Array(7)].map((_, i) => {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      return d.toISOString().split('T')[0];
-    }).reverse();
+      const metrics = {
+        totalTime: { current: calcAvg(thisMonthData, getTotalDuration), prev: calcAvg(prevMonthData, getTotalDuration) },
+        diagnosi: { current: calcAvg(thisMonthData, r => getDuration(r, 'Diagnosi')), prev: calcAvg(prevMonthData, r => getDuration(r, 'Diagnosi')) },
+        working: { current: calcAvg(thisMonthData, r => getDuration(r, 'In Lavorazione')), prev: calcAvg(prevMonthData, r => getDuration(r, 'In Lavorazione')) },
+        parts: { current: calcAvg(thisMonthData, r => getDuration(r, 'Attesa Parti')), prev: calcAvg(prevMonthData, r => getDuration(r, 'Attesa Parti')) }
+      };
 
-    // Mapping for UI Labels (DD/MM) but keeping full date for filtering
-    const bar = last7.map(date => ({
-      date: date, // YYYY-MM-DD
-      name: date.split('-').slice(1).join('/'), // DD/MM
-      count: data.filter(r => r.dateIn && r.dateIn.startsWith(date)).length,
-      active: filters.dateIn === date
-    }));
-
-    const repairedBar = last7.map(date => ({
-      date: date,
-      name: date.split('-').slice(1).join('/'),
-      count: data.filter(r => r.dateOut && r.dateOut.startsWith(date)).length,
-      active: filters.dateOut === date
-    }));
-
-    // Metrics (Compare Current Month vs Previous Month based on filtered view)
-    const thisMonthData = data.filter(r => {
-      const d = new Date(r.dateIn);
-      return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+      setStats({ pie, bar, metrics });
     });
-
-    const prevMonthDate = new Date();
-    prevMonthDate.setMonth(currentMonth - 1);
-    const prevMonthData = raw.filter(r => {
-      // Apply same filters to historical data for fair comparison
-      // Note: Applies Status/Category/Model filters, but NOT date filters (comparing time periods)
-      const sameFilter = (!filters.status || r.status === filters.status) &&
-        (!filters.category || (r.category || 'Altro') === filters.category) &&
-        (!filters.model || (r.model || 'Sconosciuto') === filters.model);
-
-      const d = new Date(r.dateIn);
-      return sameFilter && d.getMonth() === prevMonthDate.getMonth() && d.getFullYear() === prevMonthDate.getFullYear();
-    });
-
-    const calcAvg = (dataset, fn) => {
-      if (dataset.length === 0) return 0;
-      const sum = dataset.reduce((acc, r) => acc + fn(r), 0);
-      return sum / dataset.length;
-    };
-
-    const metrics = {
-      totalTime: { current: calcAvg(thisMonthData, getTotalDuration), prev: calcAvg(prevMonthData, getTotalDuration) },
-      diagnosi: { current: calcAvg(thisMonthData, r => getDuration(r, 'Diagnosi')), prev: calcAvg(prevMonthData, r => getDuration(r, 'Diagnosi')) },
-      working: { current: calcAvg(thisMonthData, r => getDuration(r, 'In Lavorazione')), prev: calcAvg(prevMonthData, r => getDuration(r, 'In Lavorazione')) },
-      parts: { current: calcAvg(thisMonthData, r => getDuration(r, 'Attesa Parti')), prev: calcAvg(prevMonthData, r => getDuration(r, 'Attesa Parti')) }
-    };
-
-    // Category Data
-    const categoryCounts = {};
-    data.forEach(r => {
-      const cat = r.category || 'Altro';
-      if (cat) {
-        categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
-      }
-    });
-
-    const categoryData = Object.keys(categoryCounts)
-      .map(cat => ({
-        name: cat,
-        count: categoryCounts[cat],
-        active: filters.category === cat
-      }))
-      .filter(x => x.count > 0)
-      .sort((a, b) => b.count - a.count);
-
-    // Model Data
-    const modelCounts = {};
-    data.forEach(r => {
-      const m = r.model || 'Sconosciuto';
-      if (!m.toLowerCase().includes('mockup')) {
-        modelCounts[m] = (modelCounts[m] || 0) + 1;
-      }
-    });
-    const modelData = Object.keys(modelCounts).map(m => ({
-      name: m,
-      count: modelCounts[m],
-      active: filters.model === m
-    })).sort((a, b) => b.count - a.count);
-
-    return { statusData, bar, repairedBar, metrics, categoryData, modelData };
-  }, [raw, filters, masterData]);
+  }, []);
 
   const downloadCSV = () => {
     const headers = ['ID Lavorazione', 'Tag', 'Modello', 'Seriale', 'Stato', 'Data Ingresso', 'Guasto'];
@@ -2738,22 +2521,13 @@ function KPIView({ masterData }) {
     );
   };
 
-  const activeFilterCount = [filters.status, filters.category, filters.model, filters.dateIn, filters.dateOut].filter(Boolean).length;
-
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm">
         <h2 className="text-xl font-bold flex items-center gap-2"><Activity /> Analytics & Report</h2>
-        <div className="flex gap-2">
-          {activeFilterCount > 0 && (
-            <button onClick={clearFilters} className="flex items-center gap-2 px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 font-bold transition-colors">
-              <X size={18} /> Rimuovi Filtri ({activeFilterCount})
-            </button>
-          )}
-          <button onClick={downloadCSV} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-bold transition-colors">
-            <Download size={18} /> Esporta CSV
-          </button>
-        </div>
+        <button onClick={downloadCSV} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-bold transition-colors">
+          <Download size={18} /> Esporta CSV
+        </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -2765,178 +2539,35 @@ function KPIView({ masterData }) {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Status Distribution */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm h-80 flex flex-col md:col-span-2">
-          <h3 className="text-sm font-bold uppercase text-gray-400 mb-4">Distribuzione Stati</h3>
-          <div style={{ width: '100%', height: 250 }}>
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm h-80 flex flex-col">
+          <h3 className="text-sm font-bold uppercase text-gray-400 mb-4">Stato Riparazioni (Attuali)</h3>
+          <div className="flex-1 min-h-0">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={stats.statusData} margin={{ top: 20 }}>
-                <XAxis
-                  dataKey="name"
-                  interval={0}
-                  tick={<ClickableTick onClick={(val) => toggleFilter('status', val)} />}
-                />
-                <YAxis allowDecimals={false} />
-                <Bar
-                  dataKey="count"
-                  fill="#6366f1"
-                  radius={[4, 4, 0, 0]}
-                  barSize={40}
-                  onClick={(data) => toggleFilter('status', data.name)}
-                  cursor="pointer"
-                >
-                  {stats.statusData && stats.statusData.map((entry, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={entry.fill}
-                      className="cursor-pointer hover:opacity-80 transition-opacity"
-                      stroke={filters.status === entry.name ? "#000" : "none"}
-                      strokeWidth={filters.status === entry.name ? 2 : 0}
-                    />
-                  ))}
-                  <LabelList dataKey="count" position="top" />
-                </Bar>
-              </BarChart>
+              <PieChart>
+                <Pie data={stats.pie} cx="50%" cy="50%" outerRadius={80} fill="#8884d8" dataKey="value" label>
+                  {stats.pie.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                </Pie>
+                <Tooltip />
+                <Legend />
+              </PieChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Volume History Card */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm h-96 flex flex-col">
-          <h3 className="text-sm font-bold uppercase text-gray-400 mb-4">Volume Ingresso (7 Giorni)</h3>
-          <div style={{ width: '100%', height: 250 }}>
+        {/* Volume History */}
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm h-80 flex flex-col">
+          <h3 className="text-sm font-bold uppercase text-gray-400 mb-4">Volume Ingressi (7 Giorni)</h3>
+          <div className="flex-1 min-h-0">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={stats.bar}>
-                <XAxis
-                  dataKey="name"
-                  tick={<ClickableTick onClick={(val) => {
-                    // Reverse lookup for date string because tick payload is "DD/MM"
-                    const match = stats.bar.find(b => b.name === val);
-                    if (match) toggleFilter('dateIn', match.date);
-                  }} />}
-                />
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" />
                 <YAxis allowDecimals={false} />
-                <Bar
-                  dataKey="count"
-                  fill="#6366f1"
-                  radius={[4, 4, 0, 0]}
-                  onClick={(data) => toggleFilter('dateIn', data.date)}
-                  cursor="pointer"
-                >
-                  {stats.bar.map((entry, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={entry.active ? "#4f46e5" : "#6366f1"}
-                      className="cursor-pointer hover:opacity-80 transition-opacity"
-                    />
-                  ))}
-                  <LabelList dataKey="count" position="top" />
-                </Bar>
+                <Tooltip />
+                <Bar dataKey="count" fill="#6366f1" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </div>
-
-        {/* Repaired Volume History */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm h-96 flex flex-col">
-          <h3 className="text-sm font-bold uppercase text-gray-400 mb-4">Volume Riparati (7 Giorni)</h3>
-          <div style={{ width: '100%', height: 250 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={stats.repairedBar}>
-                <XAxis
-                  dataKey="name"
-                  tick={<ClickableTick onClick={(val) => {
-                    const match = stats.repairedBar.find(b => b.name === val);
-                    if (match) toggleFilter('dateOut', match.date);
-                  }} />}
-                />
-                <YAxis allowDecimals={false} />
-                <Bar
-                  dataKey="count"
-                  fill="#10b981"
-                  radius={[4, 4, 0, 0]}
-                  onClick={(data) => toggleFilter('dateOut', data.date)}
-                  cursor="pointer"
-                >
-                  {stats.repairedBar.map((entry, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={entry.active ? "#059669" : "#10b981"}
-                      className="cursor-pointer hover:opacity-80 transition-opacity"
-                    />
-                  ))}
-                  <LabelList dataKey="count" position="top" />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Device Categories (Vertical Bar Chart with Labels) */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm h-[450px] flex flex-col md:col-span-2">
-          <h3 className="text-sm font-bold uppercase text-gray-400 mb-4">Distribuzione per Categoria</h3>
-          <div style={{ width: '100%', height: 350 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={stats.categoryData} margin={{ top: 20, bottom: 50 }}>
-                <XAxis
-                  dataKey="name"
-                  interval={0}
-                  tick={<CustomTick onClick={(val) => toggleFilter('category', val)} />}
-                />
-                <YAxis allowDecimals={false} />
-                <Bar
-                  dataKey="count"
-                  fill="#8884d8"
-                  radius={[4, 4, 0, 0]}
-                  barSize={40}
-                  onClick={(data) => toggleFilter('category', data.name)}
-                  className="cursor-pointer"
-                >
-                  {stats.categoryData.map((entry, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={entry.active ? "#4f46e5" : "#8884d8"}
-                      className="cursor-pointer hover:opacity-80 transition-opacity"
-                    />
-                  ))}
-                  <LabelList dataKey="count" position="top" />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
-
-      {/* Models Table */}
-      <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm flex flex-col md:col-span-2">
-        <h3 className="text-sm font-bold uppercase text-gray-400 mb-4">Dettaglio Modelli (Top 10)</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm text-gray-600 dark:text-gray-300">
-            <thead className="bg-gray-50 dark:bg-slate-700 text-xs uppercase font-bold">
-              <tr>
-                <th className="p-3">Modello</th>
-                <th className="p-3 text-right">Quantità</th>
-                <th className="p-3 text-right">% su Totale</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-slate-700">
-              {stats.modelData.slice(0, 10).map((m, i) => (
-                <tr
-                  key={i}
-                  onClick={() => toggleFilter('model', m.name)}
-                  className={`cursor-pointer transition-colors ${filters.model === m.name ? 'bg-indigo-50 dark:bg-indigo-900/30' : 'hover:bg-gray-50 dark:hover:bg-slate-700/50'}`}
-                >
-                  <td className="p-3 font-medium flex items-center gap-2">
-                    {filters.model === m.name && <CheckCircle size={14} className="text-indigo-600" />}
-                    {m.name}
-                  </td>
-                  <td className="p-3 text-right font-bold">{m.count}</td>
-                  <td className="p-3 text-right text-gray-400">
-                    {((m.count / (raw.length || 1)) * 100).toFixed(1)}%
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
       </div>
     </div>
@@ -3094,27 +2725,15 @@ function MobileHome({ onSelectTicket }) {
               <div className="text-xl font-bold">{repairs.filter(r => r.status === 'Ingresso').length}</div>
               <div className="text-[10px] uppercase tracking-wider opacity-80">Da Fare</div>
             </div>
-            <div className="bg-black/20 rounded-lg p-2 flex-1 text-center backdrop-blur-sm cursor-pointer hover:bg-black/30 transition-colors" onClick={() => onSelectTicket('FILTER:Annullato')}>
-              <div className="text-xl font-bold">{repairs.filter(r => r.status === 'Annullato').length}</div>
-              <div className="text-[10px] uppercase tracking-wider opacity-80">Annullati</div>
-            </div>
-            <div className="bg-black/20 rounded-lg p-2 flex-1 text-center backdrop-blur-sm cursor-pointer hover:bg-black/30 transition-colors" onClick={() => onSelectTicket('FILTER:Today')}>
-              <div className="text-xl font-bold">{repairs.filter(r => r.dateOut && new Date(r.dateOut).toDateString() === new Date().toDateString()).length}</div>
-              <div className="text-[10px] uppercase tracking-wider opacity-80">Riparati Oggi</div>
-            </div>
           </div>
         </div>
       )}
 
-      {/* Active Jobs List (Excluding Cancelled unless searched) */}
+      {/* Active Jobs List */}
       <div>
         <h3 className="font-bold text-slate-400 uppercase tracking-widest text-xs mb-3 ml-1">Lavorazioni {search ? 'Filtrate' : 'Attive'}</h3>
         <div className="space-y-3">
-          {loading ? <div className="text-center p-4 text-slate-500">Caricamento...</div> : filteredRepairs.filter(r => {
-            if (search === 'FILTER:Annullato') return r.status === 'Annullato';
-            if (search === 'FILTER:Today') return r.dateOut && new Date(r.dateOut).toDateString() === new Date().toDateString();
-            return r.status !== 'Annullato' && r.status !== 'Riparato' && r.status !== 'Spedito'; // Default Active View
-          }).map(r => (
+          {loading ? <div className="text-center p-4 text-slate-500">Caricamento...</div> : filteredRepairs.map(r => (
             <div key={r.id} onClick={() => onSelectTicket(r.id)} className="bg-slate-800 rounded-xl p-4 border border-slate-700 shadow-sm active:scale-[0.98] transition-transform cursor-pointer hover:bg-slate-750">
               <div className="flex justify-between items-start mb-2">
                 <Badge status={r.status} />
