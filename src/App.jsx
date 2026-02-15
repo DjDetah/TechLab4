@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight, X, Phone, Mail, MapPin,
   Camera, Save, Trash2, Clock, CheckCircle, AlertTriangle,
   Package, Truck, Wrench, Users, Activity, Settings, Link,
-  Download, ExternalLink, Filter, Calendar, MoreVertical, BrainCircuit, LayoutGrid, Minus, PlusCircle, PlayCircle, PauseCircle, Printer, Nfc, Zap, XCircle
+  Download, ExternalLink, Filter, Calendar, MoreVertical, BrainCircuit, LayoutGrid, Minus, PlusCircle, PlayCircle, PauseCircle, Printer, Nfc, Zap, XCircle, AlertCircle, ArrowUp, ArrowDown, Edit2
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList
@@ -1196,6 +1196,18 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
   const [viewPhoto, setViewPhoto] = useState(null);
+
+  // Serial Editing State (Moved to top)
+  const [isEditingSerial, setIsEditingSerial] = useState(false);
+  const [editedSerial, setEditedSerial] = useState(repair.serial || '');
+
+  const handleSaveSerial = async () => {
+    if (editedSerial !== repair.serial) {
+      await service.updateStatus(repair.id, repair.status, { serial: editedSerial });
+      setRepair(prev => ({ ...prev, serial: editedSerial }));
+    }
+    setIsEditingSerial(false);
+  };
   // Internal reload to refresh data after actions
   const handleReload = async () => {
     try {
@@ -1274,6 +1286,7 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
   // Prepare OS List
   const osList = masterData?.os_list || ['Windows 10', 'Windows 11', 'macOS', 'Linux Ubuntu', 'Android', 'iOS'];
 
+
   return (
     <div className="flex flex-col h-full bg-white dark:bg-slate-800 rounded-xl shadow-lg border border-gray-200 dark:border-slate-700 overflow-hidden animate-fade-in">
       {/* Hidden File Input */}
@@ -1297,16 +1310,41 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
               <Badge status={repair.status} />
               {repair.priorityClaim && <span className="bg-red-100 text-red-600 text-xs font-bold px-2 py-1 rounded border border-red-200 animate-pulse">URGENTE</span>}
             </h1>
-            <p className="text-sm text-gray-500 font-mono flex flex-wrap gap-2 md:gap-4 mt-1">
-              <span>ID: {repair.id}</span>
+            <div className="text-sm text-gray-500 font-mono flex flex-wrap items-center gap-2 md:gap-4 mt-1">
               {repair.tag && <span className="text-indigo-600 font-bold">TAG: {repair.tag}</span>}
+
+              {/* Serial with Edit */}
+              <div className="flex items-center gap-2">
+                {isEditingSerial ? (
+                  <div className="flex items-center gap-1">
+                    <span className="font-bold">SN:</span>
+                    <input
+                      type="text"
+                      value={editedSerial}
+                      onChange={(e) => setEditedSerial(e.target.value)}
+                      className="w-32 bg-white dark:bg-slate-900 border border-indigo-500 rounded px-1 text-xs py-0.5 outline-none"
+                      autoFocus
+                    />
+                    <button onClick={handleSaveSerial} className="p-1 bg-green-100 text-green-700 rounded hover:bg-green-200"><CheckCircle size={14} /></button>
+                    <button onClick={() => { setIsEditingSerial(false); setEditedSerial(repair.serial || ''); }} className="p-1 bg-red-100 text-red-700 rounded hover:bg-red-200"><X size={14} /></button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 group">
+                    <span>SN: {repair.serial || '-'}</span>
+                    <button onClick={() => setIsEditingSerial(true)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 dark:hover:bg-slate-700 rounded transition-opacity" title="Modifica Seriale">
+                      <Edit2 size={12} className="text-gray-400" />
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <span className="hidden md:inline">{repair.category}</span>
               {repair.hasPowerSupply && (
                 <span className="flex items-center gap-1 text-xs font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 ml-2">
                   <Zap size={10} className="fill-amber-600" /> Alimentatore
                 </span>
               )}
-            </p>
+            </div>
           </div>
         </div>
         <div className="flex gap-2 w-full md:w-auto">
@@ -1797,9 +1835,9 @@ const StatusCard = ({ label, count, variant, icon: Icon, onClick, isActive }) =>
         ${isActive ? 'ring-2 ring-indigo-500 border-indigo-500 dark:border-indigo-400' : 'border-gray-200 dark:border-slate-700'}
       `}
     >
-      <div className="min-w-0">
-        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider truncate">{label}</p>
-        <p className="text-xl font-bold text-gray-800 dark:text-white mt-0.5">{count}</p>
+      <div className="min-w-0 flex-1">
+        <p className="text-[9px] font-extrabold text-gray-400 uppercase tracking-widest truncate">{label}</p>
+        <p className="text-lg font-bold text-gray-800 dark:text-white mt-0 leading-tight">{count}</p>
       </div>
       <div className={`p-2 rounded-lg ${colorClass} shrink-0 ml-2`}>
         <Icon size={20} />
@@ -1872,84 +1910,160 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
     cancelled: repairs.filter(r => r.status === 'Annullato').length
   };
 
+  const [sortConfig, setSortConfig] = useState({ key: 'dateIn', direction: 'desc' });
+
+  const handleSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const sortedRepairs = useMemo(() => {
+    let sortableItems = [...filtered];
+    if (sortConfig.key !== null) {
+      sortableItems.sort((a, b) => {
+        let aValue = a[sortConfig.key] || '';
+        let bValue = b[sortConfig.key] || '';
+
+        // Handle Dates
+        if (sortConfig.key === 'dateIn') {
+          return sortConfig.direction === 'asc'
+            ? new Date(aValue || 0) - new Date(bValue || 0)
+            : new Date(bValue || 0) - new Date(aValue || 0);
+        }
+
+        // Handle Strings (Case Insensitive)
+        if (typeof aValue === 'string') aValue = aValue.toLowerCase();
+        if (typeof bValue === 'string') bValue = bValue.toLowerCase();
+
+        if (aValue < bValue) {
+          return sortConfig.direction === 'asc' ? -1 : 1;
+        }
+        if (aValue > bValue) {
+          return sortConfig.direction === 'asc' ? 1 : -1;
+        }
+        return 0;
+      });
+    }
+    return sortableItems;
+  }, [filtered, sortConfig]);
+
+  const SortIcon = ({ column }) => {
+    if (sortConfig.key !== column) return <MoreVertical size={14} className="opacity-20" />;
+    return sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-indigo-500" /> : <ArrowDown size={14} className="text-indigo-500" />;
+  };
+
+  const SortHeader = ({ label, column, className = "" }) => (
+    <th
+      className={`p-4 border-b dark:border-slate-700 cursor-pointer hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors select-none group ${className}`}
+      onClick={() => handleSort(column)}
+    >
+      <div className="flex items-center gap-2">
+        {label}
+        <SortIcon column={column} />
+      </div>
+    </th>
+  );
+
   return (
     <div className="flex flex-col h-full space-y-4">
 
       {/* KPI CARDS (V3 Feature) */}
       {/* KPI CARDS (V3 Feature) */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-9 gap-3">
-        <StatusCard
-          label="In Entrata"
-          count={stats.ingresso}
-          variant="blue"
-          icon={Package}
-          isActive={statusFilter === 'Ingresso'}
-          onClick={() => setStatusFilter(statusFilter === 'Ingresso' ? null : 'Ingresso')}
-        />
-        <StatusCard
-          label="Diagnosi"
-          count={stats.diagnosi}
-          variant="purple"
-          icon={Activity}
-          isActive={statusFilter === 'Diagnosi'}
-          onClick={() => setStatusFilter(statusFilter === 'Diagnosi' ? null : 'Diagnosi')}
-        />
-        <StatusCard
-          label="In Lavorazione"
-          count={stats.processing}
-          variant="indigo" // Changed to indigo/amber to match flow or distinct
-          icon={Wrench}
-          isActive={statusFilter === 'In Lavorazione'}
-          onClick={() => setStatusFilter(statusFilter === 'In Lavorazione' ? null : 'In Lavorazione')}
-        />
-        <StatusCard
-          label="Attesa Parti"
-          count={stats.parts}
-          variant="orange"
-          icon={Clock}
-          isActive={statusFilter === 'Attesa Parti'}
-          onClick={() => setStatusFilter(statusFilter === 'Attesa Parti' ? null : 'Attesa Parti')}
-        />
-        <StatusCard
-          label="Riparati"
-          count={stats.completed}
-          variant="emerald"
-          icon={CheckCircle}
-          isActive={statusFilter === 'Riparato'}
-          onClick={() => setStatusFilter(statusFilter === 'Riparato' ? null : 'Riparato')}
-        />
-        <StatusCard
-          label="Urgenti"
-          count={stats.urgent}
-          variant="red"
-          icon={AlertTriangle}
-          isActive={statusFilter === 'URGENT'}
-          onClick={() => setStatusFilter(statusFilter === 'URGENT' ? null : 'URGENT')}
-        />
-        <StatusCard
-          label="Spediti"
-          count={stats.shipped}
-          variant="gray"
-          icon={Truck}
-          isActive={statusFilter === 'Spedito'}
-          onClick={() => setStatusFilter(statusFilter === 'Spedito' ? null : 'Spedito')}
-        />
-        <StatusCard
-          label="Rep. Oggi"
-          count={stats.today}
-          variant="emerald"
-          icon={Zap}
-          isActive={statusFilter === 'TODAY'}
-          onClick={() => setStatusFilter(statusFilter === 'TODAY' ? null : 'TODAY')}
-        />
-        <StatusCard
-          label="Annullati"
-          count={stats.cancelled}
-          variant="red"
-          icon={XCircle}
-          isActive={statusFilter === 'Annullato'}
-          onClick={() => setStatusFilter(statusFilter === 'Annullato' ? null : 'Annullato')}
-        />
+      {/* KPI CARDS (V3 Feature) */}
+      <div className="flex flex-row w-full gap-2 overflow-x-auto pb-1">
+        <div className="flex-1 min-w-[100px] max-w-[200px]">
+          <StatusCard
+            label="In Entrata"
+            count={stats.ingresso}
+            variant="blue"
+            icon={Package}
+            isActive={statusFilter === 'Ingresso'}
+            onClick={() => setStatusFilter(statusFilter === 'Ingresso' ? null : 'Ingresso')}
+          />
+        </div>
+        <div className="flex-1 min-w-[100px] max-w-[200px]">
+          <StatusCard
+            label="Diagnosi"
+            count={stats.diagnosi}
+            variant="purple"
+            icon={Activity}
+            isActive={statusFilter === 'Diagnosi'}
+            onClick={() => setStatusFilter(statusFilter === 'Diagnosi' ? null : 'Diagnosi')}
+          />
+        </div>
+        <div className="flex-1 min-w-[100px] max-w-[200px]">
+          <StatusCard
+            label="In Lavorazione"
+            count={stats.processing}
+            variant="indigo" // Changed to indigo/amber to match flow or distinct
+            icon={Wrench}
+            isActive={statusFilter === 'In Lavorazione'}
+            onClick={() => setStatusFilter(statusFilter === 'In Lavorazione' ? null : 'In Lavorazione')}
+          />
+        </div>
+        <div className="flex-1 min-w-[100px] max-w-[200px]">
+          <StatusCard
+            label="Attesa Parti"
+            count={stats.parts}
+            variant="orange"
+            icon={Clock}
+            isActive={statusFilter === 'Attesa Parti'}
+            onClick={() => setStatusFilter(statusFilter === 'Attesa Parti' ? null : 'Attesa Parti')}
+          />
+        </div>
+        <div className="flex-1 min-w-[100px] max-w-[200px]">
+          <StatusCard
+            label="Rip. Oggi"
+            count={stats.today}
+            variant="emerald"
+            icon={Zap}
+            isActive={statusFilter === 'TODAY'}
+            onClick={() => setStatusFilter(statusFilter === 'TODAY' ? null : 'TODAY')}
+          />
+        </div>
+        <div className="flex-1 min-w-[100px] max-w-[200px]">
+          <StatusCard
+            label="Riparati"
+            count={stats.completed}
+            variant="emerald"
+            icon={CheckCircle}
+            isActive={statusFilter === 'Riparato'}
+            onClick={() => setStatusFilter(statusFilter === 'Riparato' ? null : 'Riparato')}
+          />
+        </div>
+        <div className="flex-1 min-w-[100px] max-w-[200px]">
+          <StatusCard
+            label="Urgenti"
+            count={stats.urgent}
+            variant="red"
+            icon={AlertTriangle}
+            isActive={statusFilter === 'URGENT'}
+            onClick={() => setStatusFilter(statusFilter === 'URGENT' ? null : 'URGENT')}
+          />
+        </div>
+        <div className="flex-1 min-w-[100px] max-w-[200px]">
+          <StatusCard
+            label="Spediti"
+            count={stats.shipped}
+            variant="gray"
+            icon={Truck}
+            isActive={statusFilter === 'Spedito'}
+            onClick={() => setStatusFilter(statusFilter === 'Spedito' ? null : 'Spedito')}
+          />
+        </div>
+        <div className="flex-1 min-w-[100px] max-w-[200px]">
+          <StatusCard
+            label="Annullati"
+            count={stats.cancelled}
+            variant="red"
+            icon={XCircle}
+            isActive={statusFilter === 'Annullato'}
+            onClick={() => setStatusFilter(statusFilter === 'Annullato' ? null : 'Annullato')}
+          />
+        </div>
       </div>
 
       {/* ACTION BAR */}
@@ -1979,35 +2093,37 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
       <div className="flex-1 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-hidden flex flex-col">
         <div className="overflow-auto flex-1">
           <table className="w-full text-left border-collapse">
-            <thead className="bg-gray-50 dark:bg-slate-900 sticky top-0 z-10 text-xs font-bold text-gray-500 uppercase tracking-wider">
+            <thead className="bg-gray-50 dark:bg-slate-900 sticky top-0 z-10 text-xs font-bold text-gray-500 uppercase tracking-wider shadow-sm">
               <tr>
-                <th className="p-4 border-b dark:border-slate-700">Tag Asset</th>
-                <th className="p-4 border-b dark:border-slate-700">Categoria</th>
-                <th className="p-4 border-b dark:border-slate-700">Modello</th>
-                <th className="p-4 border-b dark:border-slate-700 w-24">Stato</th>
-                <th className="p-4 border-b dark:border-slate-700">Tecnico</th>
-                <th className="p-4 border-b dark:border-slate-700">Priorità</th>
-                <th className="p-4 border-b dark:border-slate-700">Guasto Dichiarato</th>
-                <th className="p-4 border-b dark:border-slate-700 text-right">Azioni</th>
+                <SortHeader label="Tag Asset" column="tag" />
+                <SortHeader label="Categoria" column="category" />
+                <SortHeader label="Modello" column="model" />
+                <SortHeader label="Data Ingresso" column="dateIn" />
+                <SortHeader label="Stato" column="status" className="w-24" />
+                <SortHeader label="Tecnico" column="assignedTo" />
+                <SortHeader label="Priorità" column="priorityClaim" />
+                <SortHeader label="Guasto Dichiarato" column="faultDeclared" />
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 dark:divide-slate-700 text-sm">
-              {filtered.map(row => {
+              {sortedRepairs.map(row => {
                 const isSLAbreached = checkSLA(row, slaConfig);
                 return (
                   <tr key={row.id} onClick={() => onSelect(row)} className={`hover:bg-gray-50 dark:hover:bg-slate-700/50 cursor-pointer transition-colors group ${isSLAbreached ? 'bg-red-100 dark:bg-red-900/40 border-l-4 border-red-500' : ''}`}>
                     <td className="p-4 relative">
                       <div className="font-bold text-indigo-600 dark:text-indigo-400">{row.tag || '-'}</div>
-                      <div className="text-xs text-gray-400 font-mono mt-0.5">{row.id}</div>
+                      <div className="text-xs text-gray-500 font-mono mt-0.5 flex items-center gap-1">
+                        <Package size={10} /> {row.serial || '-'}
+                      </div>
                     </td>
-                    <td className="p-4 text-gray-700 dark:text-gray-300">
+                    <td className="p-4 text-xs text-gray-700 dark:text-gray-300">
                       {row.category}
                     </td>
                     <td className="p-4">
-                      <div className="font-bold text-gray-800 dark:text-white">{row.model}</div>
-                      <div className="text-xs text-gray-500 font-mono flex items-center gap-1">
-                        <Package size={10} /> {row.serial}
-                      </div>
+                      <div className="font-bold text-xs text-gray-800 dark:text-white">{row.model}</div>
+                    </td>
+                    <td className="p-4 text-xs text-gray-600 dark:text-gray-400">
+                      {row.dateIn ? new Date(row.dateIn).toLocaleDateString() : '-'}
                     </td>
                     <td className="p-4">
                       <div className="flex items-center gap-2">
@@ -2023,11 +2139,6 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
                     </td>
                     <td className="p-4">
                       <div className="max-w-[200px] truncate text-gray-600 dark:text-gray-300" title={row.faultDeclared}>{row.faultDeclared}</div>
-                    </td>
-                    <td className="p-4 text-right">
-                      <button className="p-2 hover:bg-gray-200 dark:hover:bg-slate-600 rounded-full text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-200">
-                        <ChevronRight size={18} />
-                      </button>
                     </td>
                   </tr>
                 );
@@ -2336,6 +2447,8 @@ function NewRepairForm({ onCancel, onSuccess, assignRules, masterData }) {
     hasPowerSupply: false
   });
 
+  const [duplicateAlert, setDuplicateAlert] = useState(null);
+
   // Derived state for models based on selected category
   const availableModels = useMemo(() => {
     const rawModels = settings.models || [];
@@ -2349,6 +2462,29 @@ function NewRepairForm({ onCancel, onSuccess, assignRules, masterData }) {
       ...prev,
       [name]: type === 'checkbox' ? checked : value
     }));
+  };
+
+  const handleTagBlur = async (e) => {
+    const tag = e.target.value.trim();
+    if (!tag) return;
+
+    const allRepairs = await service.getRepairs();
+    // Normalize comparison
+    const existing = allRepairs.filter(r => (r.tag || '').toUpperCase() === tag.toUpperCase());
+
+    if (existing.length > 0) {
+      // Sort by dateIn descending (latest first)
+      const sorted = existing.sort((a, b) => new Date(b.dateIn || 0) - new Date(a.dateIn || 0));
+      const latest = sorted[0];
+      setDuplicateAlert(latest);
+    }
+  };
+
+  const handleDuplicateResolve = (action) => {
+    if (action === 'cancel') {
+      setFormData(prev => ({ ...prev, tag: '' })); // Clear Tag
+    }
+    setDuplicateAlert(null); // Close Modal
   };
 
   const handleSubmit = async (e) => {
@@ -2365,7 +2501,54 @@ function NewRepairForm({ onCancel, onSuccess, assignRules, masterData }) {
   };
 
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-slate-800 rounded-xl shadow-lg border border-gray-200 dark:border-slate-700 overflow-hidden animate-fade-in-up">
+    <div className="flex flex-col h-full bg-white dark:bg-slate-800 rounded-xl shadow-lg border border-gray-200 dark:border-slate-700 overflow-hidden animate-fade-in-up relative">
+      {/* DUPLICATE ALERT MODAL */}
+      {duplicateAlert && (
+        <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-2xl max-w-md w-full border border-orange-200 dark:border-orange-900 animate-bounce-in">
+            <div className="flex flex-col items-center text-center gap-4">
+              <div className="p-3 bg-orange-100 dark:bg-orange-900/30 rounded-full text-orange-600 dark:text-orange-400">
+                <AlertCircle size={48} />
+              </div>
+              <h3 className="text-xl font-bold text-gray-800 dark:text-white">Cespite già presente!</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                L'asset <strong>{duplicateAlert.tag}</strong> è già stato registrato nel database.
+              </p>
+
+              <div className="bg-gray-50 dark:bg-slate-700/50 p-4 rounded-xl w-full text-left space-y-2 border border-gray-100 dark:border-slate-700">
+                <div className="flex justify-between">
+                  <span className="text-xs font-bold text-gray-400 uppercase">Ultimo Ingresso</span>
+                  <span className="font-mono font-bold">{new Date(duplicateAlert.dateIn).toLocaleDateString()}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-bold text-gray-400 uppercase">Stato Attuale</span>
+                  <Badge status={duplicateAlert.status} />
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-xs font-bold text-gray-400 uppercase">Modello</span>
+                  <span className="text-sm">{duplicateAlert.model}</span>
+                </div>
+              </div>
+
+              <div className="flex gap-3 w-full mt-2">
+                <button
+                  onClick={() => handleDuplicateResolve('cancel')}
+                  className="flex-1 py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-colors"
+                >
+                  Annulla Inserimento
+                </button>
+                <button
+                  onClick={() => handleDuplicateResolve('continue')}
+                  className="flex-1 py-3 px-4 bg-orange-500 hover:bg-orange-600 text-white font-bold rounded-xl shadow-lg shadow-orange-200 dark:shadow-none transition-colors"
+                >
+                  Continua (Rientro)
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="border-b border-gray-200 dark:border-slate-700 p-6 flex justify-between items-center bg-gray-50 dark:bg-slate-900">
         <h2 className="text-xl font-bold text-gray-800 dark:text-white flex items-center gap-3">
           <div className="bg-indigo-600 text-white p-2 rounded-lg"><Plus size={20} /></div>
@@ -2386,7 +2569,16 @@ function NewRepairForm({ onCancel, onSuccess, assignRules, masterData }) {
 
               <div className="form-group">
                 <label className="label">Tag Asset (Obbligatorio)</label>
-                <input type="text" name="tag" required className="input font-mono uppercase" placeholder="INV-2024-001" value={formData.tag} onChange={handleChange} />
+                <input
+                  type="text"
+                  name="tag"
+                  required
+                  className="input font-mono uppercase focus:ring-orange-500"
+                  placeholder="INV-2024-001"
+                  value={formData.tag}
+                  onChange={handleChange}
+                  onBlur={handleTagBlur}
+                />
               </div>
 
               <div className="form-group">
@@ -2497,10 +2689,113 @@ const ClickableTick = ({ x, y, payload, onClick }) => {
   );
 };
 
+// --- REUSABLE: RECIDIVIST COMPARISON MODAL ---
+const RecidivistComparisonModal = ({ tag, repairs, onClose }) => {
+  if (!tag || !repairs || repairs.length === 0) return null;
+
+  // Filter repairs for this tag and sort by Date In (Newest First)
+  const tagRepairs = repairs
+    .filter(r => (r.tag || '').toUpperCase() === tag.toUpperCase())
+    .sort((a, b) => new Date(b.dateIn || 0) - new Date(a.dateIn || 0));
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-[95vw] w-full max-h-[90vh] flex flex-col overflow-hidden animate-fade-in-up" onClick={e => e.stopPropagation()}>
+        <div className="p-6 border-b border-gray-200 dark:border-slate-700 flex justify-between items-center bg-gray-50 dark:bg-slate-900">
+          <h2 className="text-xl font-bold flex items-center gap-2 text-gray-800 dark:text-white">
+            <Activity className="text-orange-500" />
+            Confronto Storico Asset: <span className="font-mono bg-indigo-100 text-indigo-700 px-2 py-1 rounded border border-indigo-200 text-lg">{tag}</span>
+            <span className="text-sm font-normal text-gray-500 ml-2">({tagRepairs.length} interventi trovati)</span>
+          </h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-full transition-colors">
+            <X size={24} className="text-gray-500" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-x-auto p-6 bg-gray-100 dark:bg-slate-900/50">
+          <div className="flex gap-6 min-w-max pb-4">
+            {tagRepairs.map((repair, index) => (
+              <div key={repair.id} className="w-96 bg-white dark:bg-slate-800 rounded-xl shadow-md border border-gray-200 dark:border-slate-700 flex flex-col overflow-hidden relative group hover:border-indigo-400 transition-colors">
+                {/* Visual Connector Line */}
+                {index < tagRepairs.length - 1 && (
+                  <div className="absolute top-1/2 -right-6 w-6 h-0.5 bg-gray-300 dark:bg-slate-600 z-0"></div>
+                )}
+
+                <div className="p-4 bg-gray-50 dark:bg-slate-700/30 border-b border-gray-100 dark:border-slate-700 flex justify-between items-start">
+                  <div>
+                    <div className="text-xs font-bold text-gray-400 uppercase mb-1">Data Ingresso</div>
+                    <div className="font-bold text-lg text-indigo-600 dark:text-indigo-400">
+                      {new Date(repair.dateIn).toLocaleDateString()}
+                    </div>
+                    <div className="text-xs text-gray-400">{new Date(repair.dateIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                  </div>
+                  <div className="flex flex-col items-end gap-1">
+                    <Badge status={repair.status} />
+                    <span className="text-xs font-mono text-gray-400">ID: {repair.id.substring(0, 6)}</span>
+                  </div>
+                </div>
+
+                <div className="p-4 space-y-4 flex-1 overflow-y-auto max-h-[60vh]">
+                  <div>
+                    <h4 className="text-xs font-bold text-gray-400 uppercase mb-1">Modello & S/N</h4>
+                    <div className="font-medium text-sm">{repair.model}</div>
+                    <div className="font-mono text-xs text-gray-500 flex items-center gap-1"><Package size={10} /> {repair.serial || '-'}</div>
+                  </div>
+
+                  <div className="bg-red-50 dark:bg-red-900/10 p-3 rounded-lg border border-red-100 dark:border-red-900/30">
+                    <h4 className="text-xs font-bold text-red-500 uppercase mb-1 flex items-center gap-1"><AlertTriangle size={12} /> Guasto Dichiarato</h4>
+                    <p className="text-sm text-gray-700 dark:text-gray-300 italic">"{repair.faultDeclared}"</p>
+                  </div>
+
+                  <div>
+                    <h4 className="text-xs font-bold text-gray-400 uppercase mb-1 flex items-center gap-1"><Wrench size={12} /> Diagnosi & Note</h4>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap leading-relaxed max-h-32 overflow-y-auto border p-2 rounded bg-gray-50 dark:bg-slate-900">
+                      {repair.techNotes || <span className="text-gray-400 italic">Nessuna nota tecnica.</span>}
+                    </p>
+                  </div>
+
+                  <div>
+                    <h4 className="text-xs font-bold text-gray-400 uppercase mb-1 flex items-center gap-1"><Package size={12} /> Ricambi Utilizzati</h4>
+                    {repair.replacedParts && repair.replacedParts.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {repair.replacedParts.map((p, i) => (
+                          <span key={i} className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded border border-indigo-100">
+                            {p}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-gray-400 italic">Nessun ricambio.</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="p-3 bg-gray-50 dark:bg-slate-700/20 border-t border-gray-100 dark:border-slate-700 flex justify-between items-center text-xs">
+                  <div className="flex items-center gap-1 text-gray-500">
+                    <User size={12} />
+                    <span>{repair.assignedTo || 'Non Assegnato'}</span>
+                  </div>
+                  {repair.dateOut && (
+                    <div className="flex items-center gap-1 text-green-600 font-bold">
+                      <CheckCircle size={12} />
+                      <span>Chiuso il {new Date(repair.dateOut).toLocaleDateString()}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // --- FEATURES: KPI & ANALYTICS ---
 function KPIView({ masterData }) {
   const [filters, setFilters] = useState({ status: null, category: null, model: null, dateIn: null, dateOut: null });
   const [raw, setRaw] = useState([]);
+  const [selectedRecidivistTag, setSelectedRecidivistTag] = useState(null); // V4.6 Comparison Modal
 
   // Toggle Filters Helper
   const toggleFilter = (type, value) => {
@@ -2671,7 +2966,40 @@ function KPIView({ masterData }) {
       active: filters.model === m
     })).sort((a, b) => b.count - a.count);
 
-    return { statusData, bar, repairedBar, metrics, categoryData, modelData };
+    // 5. Recidivists (Assets with > 1 entry in last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const thirtyDaysAgoIso = thirtyDaysAgo.toISOString().split('T')[0];
+
+    // Filter ANY repair in last 30 days (ignoring other filters for this specific KPI to show global recidivism? 
+    // Or should it respect filters? User said "in 30 giorni", implying a global check. 
+    // Let's use 'raw' data restricted by time only, to be accurate about "recidivism" regardless of current UI filters.)
+    const recentRepairs = raw.filter(r => r.dateIn >= thirtyDaysAgoIso);
+
+    const tagCounts = {};
+    recentRepairs.forEach(r => {
+      const tag = (r.tag || '').toUpperCase().trim();
+      if (tag && tag !== '-') { // Ignore empty or dash tags
+        if (!tagCounts[tag]) {
+          tagCounts[tag] = { count: 0, models: new Set(), lastDate: r.dateIn, id: r.id };
+        }
+        tagCounts[tag].count++;
+        tagCounts[tag].models.add(r.model);
+        if (r.dateIn > tagCounts[tag].lastDate) tagCounts[tag].lastDate = r.dateIn;
+      }
+    });
+
+    const recidivists = Object.keys(tagCounts)
+      .filter(tag => tagCounts[tag].count > 1)
+      .map(tag => ({
+        tag,
+        count: tagCounts[tag].count,
+        models: Array.from(tagCounts[tag].models).join(', '),
+        lastDate: tagCounts[tag].lastDate
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    return { statusData, bar, repairedBar, metrics, categoryData, modelData, recidivists };
   }, [raw, filters, masterData]);
 
   const downloadCSV = () => {
@@ -2905,6 +3233,62 @@ function KPIView({ masterData }) {
           </div>
         </div>
       </div>
+
+      {/* Recidivists Table (New V4.6) */}
+      <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm flex flex-col space-y-4">
+        <h3 className="text-sm font-bold uppercase text-gray-400 flex items-center gap-2">
+          <AlertTriangle size={16} className="text-orange-500" />
+          Recidivi ( &gt; 1 Ingresso in 30 Giorni)
+        </h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm text-left">
+            <thead className="text-xs text-gray-400 uppercase bg-gray-50 dark:bg-slate-700/50 rounded-lg">
+              <tr>
+                <th className="p-3">Tag Asset</th>
+                <th className="p-3 text-center">Nr. Lavorazioni</th>
+                <th className="p-3">Ultimo Ingresso</th>
+                <th className="p-3">Modelli Coinvolti</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-slate-700">
+              {stats.recidivists && stats.recidivists.map(r => (
+                <tr key={r.tag} className="hover:bg-gray-50 dark:hover:bg-slate-700/30 group">
+                  <td className="p-3">
+                    <button
+                      onClick={() => setSelectedRecidivistTag(r.tag)}
+                      className="font-bold text-indigo-600 hover:text-indigo-800 hover:underline text-left flex items-center gap-2"
+                      title="Confronta Lavorazioni"
+                    >
+                      {r.tag}
+                      <ExternalLink size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </button>
+                  </td>
+                  <td className="p-3 text-center">
+                    <span className="font-bold text-orange-600 bg-orange-50 dark:bg-orange-900/20 px-2 py-1 rounded-lg border border-orange-100 dark:border-orange-900">
+                      {r.count}
+                    </span>
+                  </td>
+                  <td className="p-3 text-gray-600 dark:text-gray-300">{new Date(r.lastDate).toLocaleDateString()}</td>
+                  <td className="p-3 text-xs text-gray-500">{r.models}</td>
+                </tr>
+              ))}
+              {stats.recidivists && stats.recidivists.length === 0 && (
+                <tr>
+                  <td colSpan="4" className="p-8 text-center text-gray-400 italic">
+                    Nessun asset recidivo negli ultimi 30 giorni. Ottimo! 🎉
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <RecidivistComparisonModal
+        tag={selectedRecidivistTag}
+        repairs={raw}
+        onClose={() => setSelectedRecidivistTag(null)}
+      />
 
       {/* Models Table */}
       <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm flex flex-col md:col-span-2">
