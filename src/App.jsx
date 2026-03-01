@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight, X, Phone, Mail, MapPin,
   Camera, Save, Trash2, Clock, CheckCircle, AlertTriangle,
   Package, Truck, Wrench, Users, Activity, Settings, Link,
-  Download, ExternalLink, Filter, Calendar, MoreVertical, BrainCircuit, LayoutGrid, Minus, PlusCircle, PlayCircle, PauseCircle, Printer, Nfc, Zap, XCircle, AlertCircle, ArrowUp, ArrowDown, Edit2
+  Download, ExternalLink, Filter, Calendar, MoreVertical, BrainCircuit, LayoutGrid, Minus, PlusCircle, PlayCircle, PauseCircle, Printer, Nfc, Zap, XCircle, AlertCircle, ArrowUp, ArrowDown, Edit2, Database, Upload
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList
@@ -21,8 +21,38 @@ import {
   getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged
 } from "firebase/auth";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import Papa from 'papaparse'; // V4.8 Maglaser Import
 
-// --- FIREBASE CONFIGURATION ---
+// --- GLOBAL DATE FORMATTER (V4.7) ---
+const formatDateTime = (dateString, showTime = true) => {
+  if (!dateString) return '-';
+
+  let d;
+  if (dateString.toDate && typeof dateString.toDate === 'function') {
+    d = dateString.toDate(); // Handle Firestore Timestamp Native
+  } else if (dateString.seconds) {
+    d = new Date(dateString.seconds * 1000); // Handle Firestore Timestamp Object literal
+  } else {
+    d = new Date(dateString);
+  }
+
+  if (isNaN(d.getTime())) {
+    return typeof dateString === 'string' ? dateString : '-';
+  }
+
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+
+  if (!showTime) return `${day}/${month}/${year}`;
+
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+
+  return `${day}/${month}/${year} ${hours}:${minutes}`;
+};
+
+// --- FIREBASE SETUP ---
 const firebaseConfig = {
   apiKey: "AIzaSyB6R3IDtiAlHkdrLSEQnjB3xQbxxLX_5wE",
   authDomain: "techlab-ab141.firebaseapp.com",
@@ -372,6 +402,147 @@ class RepairService {
 
     await batch.commit();
   }
+
+  // --- MAGLASER IMPORT (V4.8) ---
+  async importMaglaserData(file) {
+    return new Promise((resolve, reject) => {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: async (results) => {
+          try {
+            if (!this.useFirebase) {
+              console.warn("Maglaser import only supported with Firebase enabled.");
+              resolve({ success: true, count: results.data.length, mock: true });
+              return;
+            }
+
+            const data = results.data;
+            if (data.length === 0) throw new Error("File CSV vuoto o formato non valido.");
+
+            // Diagnostica Colonne
+            const firstRowFields = results.meta.fields || Object.keys(data[0] || {});
+
+            // Check delimitatore errato (es. separato da punto e virgola ma letto come unica colonna)
+            if (firstRowFields.length === 1 && (firstRowFields[0].includes(';') || firstRowFields[0].includes(','))) {
+              throw new Error(`Errore formato: Il file CVS sembra avere un delimitatore non standard o è corrotto. Colonne lette: ${firstRowFields[0]}`);
+            }
+
+            // Ricerca dinamica delle chiavi (case-insensitive)
+            const findKey = (searchStr) => firstRowFields.find(f => f?.toLowerCase().trim() === searchStr.toLowerCase().trim())
+              || firstRowFields.find(f => f?.toLowerCase().includes(searchStr.toLowerCase()));
+
+            const keyTag = findKey('Tag asset') || findKey('asset_tag') || findKey('tag');
+
+            if (!keyTag) {
+              throw new Error("Impossibile trovare la colonna 'Tag asset'. Colonne trovate: \n" + firstRowFields.join(' | '));
+            }
+
+            const keySerial = findKey('Numero di serie') || findKey('serial_number') || findKey('Serial');
+            const keyRecon = findKey('Reconciliation') || findKey('u_reconciliation_serial_number');
+            const keyModel = findKey('Item') || findKey('model.u_isgs_item') || findKey('Model');
+            const keyDisplay = findKey('Nome visualizzato') || findKey('model.display_name');
+            const keyDate = findKey('Data Stato') || findKey('u_status_date') || findKey('Data') || findKey('date');
+            const keyScope = findKey('Ambito') || findKey('u_ambito_di_utilizzo');
+            const keyProject = findKey('Project') || findKey('u_project') || findKey('Progetto');
+            const keySub = findKey('Stato secondario') || findKey('substatus');
+            const keyMaint = findKey('Categoria Manutentiva') || findKey('u_isgs_category_maintenance');
+            const keyComments = findKey('Commenti') || findKey('comments');
+
+            // Helper for parsing CSV dates (DD/MM/YYYY -> JS Date)
+            const parseCSVDate = (dateStr) => {
+              if (!dateStr) return null;
+              // Isolate date part by stripping time string if present (e.g. 2024-03-01 14:30 -> 2024-03-01)
+              const dateOnly = dateStr.trim().split(' ')[0];
+              const parts = dateOnly.split(/[\/\-]/);
+
+              if (parts.length === 3) {
+                if (parts[0].length === 4) { // YYYY-MM-DD
+                  return new Date(`${parts[0]}-${parts[1]}-${parts[2]}T12:00:00Z`);
+                }
+                if (parts[2].length === 4) { // DD/MM/YYYY format
+                  return new Date(`${parts[2]}-${parts[1]}-${parts[0]}T12:00:00Z`);
+                }
+              }
+
+              const d = new Date(dateStr);
+              return isNaN(d.getTime()) ? null : d;
+            };
+
+            // 1. Delete existing maglaser collection data
+            const q = query(collection(db, "maglaser"));
+            const snapshot = await getDocs(q);
+
+            // Delete in batches of 500 (Firestore limit)
+            const deleteBatches = [];
+            let currentDeleteBatch = writeBatch(db);
+            let deleteCount = 0;
+
+            snapshot.docs.forEach((docSnap) => {
+              currentDeleteBatch.delete(docSnap.ref);
+              deleteCount++;
+              if (deleteCount === 500) {
+                deleteBatches.push(currentDeleteBatch.commit());
+                currentDeleteBatch = writeBatch(db);
+                deleteCount = 0;
+              }
+            });
+            if (deleteCount > 0) deleteBatches.push(currentDeleteBatch.commit());
+            await Promise.all(deleteBatches);
+
+            // 2. Map and insert new data
+            const insertBatches = [];
+            let currentInsertBatch = writeBatch(db);
+            let insertCount = 0;
+            let validRows = 0;
+
+            data.forEach((row) => {
+              const tag = (row[keyTag] || '').toString().trim().toUpperCase();
+              if (tag && tag !== '-') { // Valid tag required
+                const mappedData = {
+                  tag: tag,
+                  serial: keySerial ? (row[keySerial] || '').toString().trim() : '',
+                  reconSerial: keyRecon ? (row[keyRecon] || '').toString().trim() : '',
+                  model: keyModel ? (row[keyModel] || '').toString().trim() : '',
+                  displayName: keyDisplay ? (row[keyDisplay] || '').toString().trim() : '',
+                  statusDate: keyDate ? parseCSVDate((row[keyDate] || '').toString().trim()) : null,
+                  scope: keyScope ? (row[keyScope] || '').toString().trim() : '',
+                  project: keyProject ? (row[keyProject] || '').toString().trim() : '',
+                  subStatus: keySub ? (row[keySub] || '').toString().trim() : '',
+                  maintCategory: keyMaint ? (row[keyMaint] || '').toString().trim() : '',
+                  comments: keyComments ? (row[keyComments] || '').toString().trim() : '',
+                  importedAt: serverTimestamp()
+                };
+
+                // Use Tag as Document ID for easy lookup and strictly no duplicates
+                const docRef = doc(db, "maglaser", tag);
+                currentInsertBatch.set(docRef, mappedData);
+                insertCount++;
+                validRows++;
+
+                if (insertCount === 500) {
+                  insertBatches.push(currentInsertBatch.commit());
+                  currentInsertBatch = writeBatch(db);
+                  insertCount = 0;
+                }
+              }
+            });
+
+            if (insertCount > 0) insertBatches.push(currentInsertBatch.commit());
+            await Promise.all(insertBatches);
+
+            resolve({ success: true, count: validRows });
+          } catch (err) {
+            console.error("Maglaser Import Error:", err);
+            reject(err);
+          }
+        },
+        error: (error) => {
+          reject(error);
+        }
+      });
+    });
+  }
 }
 
 const service = new RepairService();
@@ -448,7 +619,7 @@ function PrintLabel() {
           <h1 className="text-2xl font-black leading-none mb-1">{ticket.tag}</h1>
           <p className="text-[10px] font-mono mb-2">{ticket.id}</p>
           <p className="font-bold text-sm leading-tight truncate">{ticket.model.substring(0, 20)}</p>
-          <p className="text-[10px] mt-1">{new Date().toLocaleDateString()}</p>
+          <p className="text-[10px] mt-1">{formatDateTime(new Date().toISOString(), false)}</p>
         </div>
       </div>
       <div className="mt-8 text-xs text-gray-400 print:hidden">Prenota Stampa...</div>
@@ -869,93 +1040,97 @@ function SettingsView({ slaConfig, onUpdate, assignRules, onUpdateRules, masterD
 
       <div className="space-y-8">
 
-        {/* SECTION 1: SLA */}
-        <div className="space-y-4">
-          <h3 className="text-lg font-bold flex items-center gap-2"><Clock className="text-gray-400" /> Soglie SLA (Ore)</h3>
-          <div className="bg-indigo-50 dark:bg-indigo-900/20 p-4 rounded-lg border border-indigo-100 dark:border-indigo-800 mb-4">
-            <p className="text-sm text-indigo-800 dark:text-indigo-300">
-              Imposta il tempo massimo per ogni stato. Oltre questa soglia, la riparazione verrà segnalata in ritardo.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {statuses.map(status => (
-              <div key={status} className="form-group">
-                <label className="label">{status}</label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    className="input pr-12"
-                    value={localConfig[status] || ''}
-                    onChange={(e) => setLocalConfig({ ...localConfig, [status]: parseInt(e.target.value) || 0 })}
-                    placeholder="0"
-                  />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs font-bold">H</span>
+        {/* SECTION 1: SLA (Manager Only) */}
+        {profile?.role === 'manager' && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-bold flex items-center gap-2"><Clock className="text-gray-400" /> Soglie SLA (Ore)</h3>
+            <div className="bg-indigo-50 dark:bg-indigo-900/20 p-4 rounded-lg border border-indigo-100 dark:border-indigo-800 mb-4">
+              <p className="text-sm text-indigo-800 dark:text-indigo-300">
+                Imposta il tempo massimo per ogni stato. Oltre questa soglia, la riparazione verrà segnalata in ritardo.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {statuses.map(status => (
+                <div key={status} className="form-group">
+                  <label className="label">{status}</label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      className="input pr-12"
+                      value={localConfig[status] || ''}
+                      onChange={(e) => setLocalConfig({ ...localConfig, [status]: parseInt(e.target.value) || 0 })}
+                      placeholder="0"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs font-bold">H</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* SECTION 2: AUTO ASSIGN - REMOVED IN V4.1 */}
 
-        {/* Labels & NFC Settings (V4.2) */}
-        <div className="mb-8 border-t pt-8 dark:border-slate-700">
-          <h3 className="text-lg font-bold text-gray-700 dark:text-gray-300 mb-4 flex items-center gap-2"><Printer size={20} /> Etichette & NFC</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Labels */}
-            <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-gray-200 dark:border-slate-700">
-              <h4 className="font-bold flex items-center gap-2 mb-3"><Printer size={16} /> Stampa Etichette</h4>
-              <div className="space-y-3">
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input type="checkbox" className="toggle toggle-primary"
-                    checked={localMaster.enableLabels || false}
-                    onChange={(e) => handleMasterDataUpdate('enableLabels', e.target.checked)} />
-                  <span>Abilita Generazione Etichette</span>
-                </label>
-                <label className={`flex items-center gap-3 cursor-pointer ${!localMaster.enableLabels && 'opacity-50 pointer-events-none'}`}>
-                  <input type="checkbox" className="toggle toggle-warning"
-                    checked={localMaster.forceLabelPrint || false}
-                    onChange={(e) => handleMasterDataUpdate('forceLabelPrint', e.target.checked)} />
-                  <span>Stampa Obbligatoria (Blocca chiusura)</span>
-                </label>
+        {/* Labels & NFC Settings (V4.2 - Manager Only) */}
+        {profile?.role === 'manager' && (
+          <div className="mb-8 border-t pt-8 dark:border-slate-700">
+            <h3 className="text-lg font-bold text-gray-700 dark:text-gray-300 mb-4 flex items-center gap-2"><Printer size={20} /> Etichette & NFC</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Labels */}
+              <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-gray-200 dark:border-slate-700">
+                <h4 className="font-bold flex items-center gap-2 mb-3"><Printer size={16} /> Stampa Etichette</h4>
+                <div className="space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" className="toggle toggle-primary"
+                      checked={localMaster.enableLabels || false}
+                      onChange={(e) => handleMasterDataUpdate('enableLabels', e.target.checked)} />
+                    <span>Abilita Generazione Etichette</span>
+                  </label>
+                  <label className={`flex items-center gap-3 cursor-pointer ${!localMaster.enableLabels && 'opacity-50 pointer-events-none'}`}>
+                    <input type="checkbox" className="toggle toggle-warning"
+                      checked={localMaster.forceLabelPrint || false}
+                      onChange={(e) => handleMasterDataUpdate('forceLabelPrint', e.target.checked)} />
+                    <span>Stampa Obbligatoria (Blocca chiusura)</span>
+                  </label>
+                </div>
               </div>
-            </div>
-            {/* Mobile Mode Settings (V4.2) */}
-            <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-gray-200 dark:border-slate-700 md:col-span-2">
-              <h4 className="font-bold flex items-center gap-2 mb-3"><LayoutGrid size={16} /> Mobile Operator Mode (Beta)</h4>
-              <div className="space-y-3">
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input type="checkbox" className="toggle toggle-primary"
-                    checked={localMaster.enableMobileMode || false}
-                    onChange={(e) => handleMasterDataUpdate('enableMobileMode', e.target.checked)} />
-                  <span>Abilita Interfaccia Mobile (/operator)</span>
-                </label>
-                <p className="text-xs text-gray-500">
-                  Abilita la vista semplificata per operatori e l'uso dello scanner da mobile. Utile per tablet e smartphone.
-                </p>
+              {/* Mobile Mode Settings (V4.2) */}
+              <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-gray-200 dark:border-slate-700 md:col-span-2">
+                <h4 className="font-bold flex items-center gap-2 mb-3"><LayoutGrid size={16} /> Mobile Operator Mode (Beta)</h4>
+                <div className="space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" className="toggle toggle-primary"
+                      checked={localMaster.enableMobileMode || false}
+                      onChange={(e) => handleMasterDataUpdate('enableMobileMode', e.target.checked)} />
+                    <span>Abilita Interfaccia Mobile (/operator)</span>
+                  </label>
+                  <p className="text-xs text-gray-500">
+                    Abilita la vista semplificata per operatori e l'uso dello scanner da mobile. Utile per tablet e smartphone.
+                  </p>
+                </div>
               </div>
-            </div>
 
-            {/* NFC */}
-            <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-gray-200 dark:border-slate-700">
-              <h4 className="font-bold flex items-center gap-2 mb-3"><Nfc size={16} /> Tag NFC</h4>
-              <div className="space-y-3">
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input type="checkbox" className="toggle toggle-primary"
-                    checked={localMaster.enableNFC || false}
-                    onChange={(e) => handleMasterDataUpdate('enableNFC', e.target.checked)} />
-                  <span>Abilita Scrittura NFC</span>
-                </label>
-                <label className={`flex items-center gap-3 cursor-pointer ${!localMaster.enableNFC && 'opacity-50 pointer-events-none'}`}>
-                  <input type="checkbox" className="toggle toggle-warning"
-                    checked={localMaster.forceNFC || false}
-                    onChange={(e) => handleMasterDataUpdate('forceNFC', e.target.checked)} />
-                  <span>Scrittura Obbligatoria</span>
-                </label>
+              {/* NFC */}
+              <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-gray-200 dark:border-slate-700">
+                <h4 className="font-bold flex items-center gap-2 mb-3"><Nfc size={16} /> Tag NFC</h4>
+                <div className="space-y-3">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" className="toggle toggle-primary"
+                      checked={localMaster.enableNFC || false}
+                      onChange={(e) => handleMasterDataUpdate('enableNFC', e.target.checked)} />
+                    <span>Abilita Scrittura NFC</span>
+                  </label>
+                  <label className={`flex items-center gap-3 cursor-pointer ${!localMaster.enableNFC && 'opacity-50 pointer-events-none'}`}>
+                    <input type="checkbox" className="toggle toggle-warning"
+                      checked={localMaster.forceNFC || false}
+                      onChange={(e) => handleMasterDataUpdate('forceNFC', e.target.checked)} />
+                    <span>Scrittura Obbligatoria</span>
+                  </label>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* SECTION 3: MASTER DATA (Gestione Anagrafiche) */}
         <div className="pt-8 border-t dark:border-slate-700">
@@ -1021,7 +1196,42 @@ function SettingsView({ slaConfig, onUpdate, assignRules, onUpdateRules, masterD
           <hr className="my-8 border-gray-200 dark:border-slate-700" />
         </div>
 
-        {/* SECTION 4: DANGER ZONE (Manager Only) */}
+        {/* SECTION 4: MAGLASER IMPORT (V4.8) */}
+        {['manager', 'head_tech'].includes(profile?.role) && (
+          <div className="pt-8 border-t dark:border-slate-700">
+            <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><Database className="text-indigo-400" /> Integrazione Maglaser</h3>
+            <div className="bg-indigo-50 dark:bg-indigo-900/10 p-6 rounded-xl border border-indigo-100 dark:border-indigo-900/30">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h4 className="font-bold text-indigo-900 dark:text-indigo-300">Sincronizzazione Dati Asset</h4>
+                  <p className="text-sm text-indigo-700/80 dark:text-indigo-400/80 mt-1">
+                    Carica l'export CSV di Maglaser per aggiornare l'elenco degli apparati e i relativi progetti.
+                    <br /><strong>Attenzione:</strong> Ogni caricamento sovrascrive completamente l'archivio precedente.
+                  </p>
+                </div>
+                <label className="cursor-pointer px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg transition-colors shadow-sm flex items-center gap-2">
+                  <Upload size={18} /> Carica CSV
+                  <input type="file" accept=".csv" className="hidden" onChange={async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    if (!confirm("Attenzione: questo sovrascriverà tutti i dati Maglaser precedenti. Procedere?")) return;
+
+                    try {
+                      alert("Importazione avviata, attendi la conferma...");
+                      const result = await service.importMaglaserData(file);
+                      alert(`Importazione completata con successo! ${result.count} record importati.`);
+                    } catch (err) {
+                      alert(`Errore durante l'importazione: ${err.message}`);
+                    }
+                    e.target.value = null; // reset input
+                  }} />
+                </label>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SECTION 5: DANGER ZONE (Manager Only) */}
         {profile?.role === 'manager' && (
           <div className="pt-8 border-t border-red-100 dark:border-red-900/30">
             <h3 className="text-lg font-bold text-red-600 mb-4 flex items-center gap-2"><AlertTriangle /> Zona Pericolo</h3>
@@ -1192,6 +1402,9 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
   // Local state for tech notes editing
   const [techNotes, setTechNotes] = useState('');
 
+  // V4.8 Maglaser state
+  const [maglaserData, setMaglaserData] = useState(null);
+
   // Ref for file input - MUST be defined before early returns
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
@@ -1226,6 +1439,27 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
 
   // Initial load to ensure fresh data
   useEffect(() => { handleReload(); }, []);
+
+  // Fetch Maglaser Data based on Tag
+  useEffect(() => {
+    const fetchMaglaser = async () => {
+      if (!repair?.tag) return;
+      try {
+        if (service.useFirebase) {
+          const docRef = doc(db, "maglaser", repair.tag.toUpperCase());
+          const snap = await getDoc(docRef);
+          if (snap.exists()) {
+            setMaglaserData(snap.data());
+          } else {
+            setMaglaserData(null);
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching Maglaser data:", err);
+      }
+    };
+    fetchMaglaser();
+  }, [repair?.tag]);
 
   // Sync local state when prop updates (e.g. after parent reload)
 
@@ -1428,6 +1662,48 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
               <h3 className="text-xs font-bold uppercase text-gray-400 mb-2">Note Ingresso</h3>
               <p className="text-sm text-gray-600 dark:text-gray-300 italic">"{repair.notes || 'Nessuna nota inserita.'}"</p>
             </div>
+
+            {/* V4.8 MAGLASER INTEGRATION PANEL */}
+            {maglaserData && (
+              <div className="card p-4 border border-indigo-200 dark:border-indigo-900/50 bg-indigo-50/30 dark:bg-indigo-900/10 rounded-xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-3 opacity-10">
+                  <Database size={40} className="text-indigo-600" />
+                </div>
+                <h3 className="text-xs font-bold uppercase text-indigo-800 dark:text-indigo-300 mb-3 flex items-center gap-2">
+                  <Database size={14} /> Dati Maglaser
+                </h3>
+                <div className="space-y-3 relative z-10">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500 dark:text-gray-400">Data Stato</span>
+                    <span className="font-bold text-gray-800 dark:text-gray-200 text-right">
+                      {maglaserData.statusDate ? formatDateTime(maglaserData.statusDate, false) : '-'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500 dark:text-gray-400">Progetto</span>
+                    <span className="font-bold text-gray-800 dark:text-gray-200 text-right">{maglaserData.project || '-'}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500 dark:text-gray-400">Ambito</span>
+                    <span className="font-bold text-gray-800 dark:text-gray-200 text-right">{maglaserData.scope || '-'}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500 dark:text-gray-400">Stato Secondario</span>
+                    <span className="font-bold text-gray-800 dark:text-gray-200 text-right">{maglaserData.subStatus || '-'}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500 dark:text-gray-400">Categoria Manut.</span>
+                    <span className="font-bold text-gray-800 dark:text-gray-200 text-right">{maglaserData.maintCategory || '-'}</span>
+                  </div>
+                  {(maglaserData.reconSerial || maglaserData.comments) && (
+                    <div className="mt-2 pt-2 border-t border-indigo-100 dark:border-indigo-800/30 text-xs text-gray-500">
+                      {maglaserData.reconSerial && <p><strong>Recon Serial:</strong> {maglaserData.reconSerial}</p>}
+                      {maglaserData.comments && <p className="mt-1 italic">"{maglaserData.comments}"</p>}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* SPARE PARTS MONITOR (V4.2 Linked to Inventory) */}
             {['In Lavorazione', 'Attesa Parti', 'Riparato', 'Spedito'].includes(repair.status) && (
@@ -1776,7 +2052,7 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
 // Helpers...
 function DateRow({ label, date, highlight }) {
   if (!date) return null;
-  return <div className={`flex justify-between text-sm ${highlight ? 'text-indigo-600 font-bold' : 'text-gray-600 dark:text-gray-400'}`}><span>{label}</span><span>{new Date(date).toLocaleDateString()}</span></div>;
+  return <div className={`flex justify-between text-sm ${highlight ? 'text-indigo-600 font-bold' : 'text-gray-600 dark:text-gray-400'}`}><span>{label}</span><span>{formatDateTime(date, false)}</span></div>;
 }
 function ActionButton({ label, onClick, primary, className }) {
   return <button onClick={onClick} className={`py-3 rounded-xl font-bold transition-all ${primary ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'} ${className}`}>{label}</button>;
@@ -1967,6 +2243,64 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
     </th>
   );
 
+  const downloadFilteredCSV = () => {
+    if (sortedRepairs.length === 0) return alert('Nessun dato da esportare!');
+
+    // Using standard KPI field structure
+    const headers = [
+      'ID Lavorazione', 'Tag', 'Categoria', 'Modello', 'Seriale',
+      'Stato', 'Data Ingresso', 'Data Inizio Lavorazione',
+      'Data Attesa Parti', 'Data Ripresa Lavorazione',
+      'Data Rientro RMA', 'Data Chiusura', 'Guasto Dichiarato',
+      'Rientro da Staging', 'Diagnosi / Note Tecnico', 'Ricambi Utilizzati',
+      'Assegnato A', 'Urgente', 'Alimentatore', 'Dettagli RMA (Ticket/Data/Note)',
+      'Cronologia Stati (Stato:Data)'
+    ];
+
+    const escape = (text) => {
+      if (text === null || text === undefined || text === '') return '""';
+      const str = String(text).replace(/"/g, '""').replace(/\n/g, ' ');
+      return `"${str}"`;
+    };
+
+    const rows = sortedRepairs.map(r => [
+      r.id,
+      r.tag,
+      r.category || 'Altro',
+      r.model,
+      r.serial,
+      r.status,
+      formatDateTime(r.dateIn, true),
+      r.dateStart ? formatDateTime(r.dateStart, true) : '',
+      r.datePartsMissing ? formatDateTime(r.datePartsMissing, true) : '',
+      r.dateResume ? formatDateTime(r.dateResume, true) : '',
+      r.dateRmaReturn ? formatDateTime(r.dateRmaReturn, true) : '',
+      r.dateOut ? formatDateTime(r.dateOut, true) : '',
+      r.faultDeclared,
+      r.stagingReturn ? 'SI' : 'NO',
+      r.techNotes || '',
+      r.replacedParts ? r.replacedParts.join(', ') : '',
+      r.assignedTo || '',
+      r.priorityClaim ? 'SI' : 'NO',
+      r.hasPowerSupply ? 'SI' : 'NO',
+      r.rmaInfo ? `Ticket: ${r.rmaInfo.ticket || '-'} | Data Invio: ${r.rmaInfo.dateSent ? formatDateTime(r.rmaInfo.dateSent, false) : '-'} | Note: ${r.rmaInfo.notes || '-'}` : '',
+      r.timeline && r.timeline.length > 0 ? r.timeline.map(t => `${t.status} (${formatDateTime(t.date, true)})`).join(' -> ') : ''
+    ].map(escape).join(';'));
+
+    const csvContent = "data:text/csv;charset=utf-8,\uFEFF"
+      + headers.join(';') + "\n"
+      + rows.join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    const nowStr = formatDateTime(new Date().toISOString(), true).replace(/[\s/:]/g, '_');
+    link.setAttribute("download", `techlab_dashboard_export_${nowStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="flex flex-col h-full space-y-4">
 
@@ -2082,6 +2416,9 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
           <button onClick={loadData} className="p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition-colors" title="Aggiorna">
             <div className="flex items-center gap-2"><div className={`w-2 h-2 rounded-full ${loading ? 'bg-indigo-500 animate-pulse' : 'bg-green-500'}`} /> Reload</div>
           </button>
+          <button onClick={downloadFilteredCSV} className="flex items-center gap-2 px-4 py-2 text-sm font-bold bg-emerald-600 text-white rounded-lg shadow-md shadow-emerald-200 dark:shadow-none hover:bg-emerald-700 transition-colors">
+            <Download size={18} /> CSV
+          </button>
           <button onClick={onAdd} className="flex items-center gap-2 px-4 py-2 text-sm font-bold bg-indigo-600 text-white rounded-lg shadow-md shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 transition-colors">
             <Plus size={18} /> Nuovo Ingresso
           </button>
@@ -2123,7 +2460,7 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
                       <div className="font-bold text-xs text-gray-800 dark:text-white">{row.model}</div>
                     </td>
                     <td className="p-4 text-xs text-gray-600 dark:text-gray-400">
-                      {row.dateIn ? new Date(row.dateIn).toLocaleDateString() : '-'}
+                      {row.dateIn ? formatDateTime(row.dateIn) : '-'}
                     </td>
                     <td className="p-4">
                       <div className="flex items-center gap-2">
@@ -2448,6 +2785,7 @@ function NewRepairForm({ onCancel, onSuccess, assignRules, masterData }) {
   });
 
   const [duplicateAlert, setDuplicateAlert] = useState(null);
+  const [maglaserData, setMaglaserData] = useState(null); // V4.8 Maglaser Verify
 
   // Derived state for models based on selected category
   const availableModels = useMemo(() => {
@@ -2466,17 +2804,33 @@ function NewRepairForm({ onCancel, onSuccess, assignRules, masterData }) {
 
   const handleTagBlur = async (e) => {
     const tag = e.target.value.trim();
-    if (!tag) return;
+    if (!tag) {
+      setMaglaserData(null);
+      return;
+    }
 
+    // 1. Check for duplicates in active repairs
     const allRepairs = await service.getRepairs();
-    // Normalize comparison
     const existing = allRepairs.filter(r => (r.tag || '').toUpperCase() === tag.toUpperCase());
 
     if (existing.length > 0) {
-      // Sort by dateIn descending (latest first)
       const sorted = existing.sort((a, b) => new Date(b.dateIn || 0) - new Date(a.dateIn || 0));
-      const latest = sorted[0];
-      setDuplicateAlert(latest);
+      setDuplicateAlert(sorted[0]);
+    }
+
+    // 2. Check Maglaser Collection (V4.8)
+    try {
+      if (service.useFirebase) {
+        const docRef = doc(db, "maglaser", tag.toUpperCase());
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          setMaglaserData(snap.data());
+        } else {
+          setMaglaserData(null);
+        }
+      }
+    } catch (err) {
+      console.error("Maglaser fetch error:", err);
     }
   };
 
@@ -2518,7 +2872,7 @@ function NewRepairForm({ onCancel, onSuccess, assignRules, masterData }) {
               <div className="bg-gray-50 dark:bg-slate-700/50 p-4 rounded-xl w-full text-left space-y-2 border border-gray-100 dark:border-slate-700">
                 <div className="flex justify-between">
                   <span className="text-xs font-bold text-gray-400 uppercase">Ultimo Ingresso</span>
-                  <span className="font-mono font-bold">{new Date(duplicateAlert.dateIn).toLocaleDateString()}</span>
+                  <span className="font-mono font-bold">{formatDateTime(duplicateAlert.dateIn, false)}</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-xs font-bold text-gray-400 uppercase">Stato Attuale</span>
@@ -2580,6 +2934,37 @@ function NewRepairForm({ onCancel, onSuccess, assignRules, masterData }) {
                   onBlur={handleTagBlur}
                 />
               </div>
+
+              {/* V4.8 Maglaser Verified Card */}
+              {maglaserData && (
+                <div className="p-3 bg-indigo-50/50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800/50 rounded-lg shadow-sm relative overflow-hidden animate-fade-in">
+                  <div className="absolute top-0 right-0 p-2 opacity-10">
+                    <Database size={30} className="text-indigo-600" />
+                  </div>
+                  <div className="flex items-center gap-2 mb-2 text-indigo-800 dark:text-indigo-300">
+                    <CheckCircle size={16} />
+                    <span className="text-xs font-bold uppercase tracking-wider">Asset Verificato: Maglaser</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <div className="flex flex-col">
+                      <span className="text-gray-400">Modello Maglaser</span>
+                      <span className="font-bold text-gray-700 dark:text-gray-200">{maglaserData.model || '-'}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-gray-400">Data Stato</span>
+                      <span className="font-bold text-gray-700 dark:text-gray-200">{maglaserData.statusDate ? formatDateTime(maglaserData.statusDate, false) : '-'}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-gray-400">Ambito</span>
+                      <span className="font-bold text-gray-700 dark:text-gray-200">{maglaserData.scope || '-'}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-gray-400">Stato Secondario</span>
+                      <span className="font-bold text-gray-700 dark:text-gray-200">{maglaserData.subStatus || '-'}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="form-group">
                 <label className="label">Seriale (S/N)</label>
@@ -2725,9 +3110,9 @@ const RecidivistComparisonModal = ({ tag, repairs, onClose }) => {
                   <div>
                     <div className="text-xs font-bold text-gray-400 uppercase mb-1">Data Ingresso</div>
                     <div className="font-bold text-lg text-indigo-600 dark:text-indigo-400">
-                      {new Date(repair.dateIn).toLocaleDateString()}
+                      {formatDateTime(repair.dateIn, false)}
                     </div>
-                    <div className="text-xs text-gray-400">{new Date(repair.dateIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                    <div className="text-xs text-gray-400">{repair.dateIn ? formatDateTime(repair.dateIn).split(' ')[1] : ''}</div>
                   </div>
                   <div className="flex flex-col items-end gap-1">
                     <Badge status={repair.status} />
@@ -2778,7 +3163,7 @@ const RecidivistComparisonModal = ({ tag, repairs, onClose }) => {
                   {repair.dateOut && (
                     <div className="flex items-center gap-1 text-green-600 font-bold">
                       <CheckCircle size={12} />
-                      <span>Chiuso il {new Date(repair.dateOut).toLocaleDateString()}</span>
+                      <span>Chiuso il {formatDateTime(repair.dateOut, false)}</span>
                     </div>
                   )}
                 </div>
@@ -3003,10 +3388,18 @@ function KPIView({ masterData }) {
   }, [raw, filters, masterData]);
 
   const downloadCSV = () => {
-    const headers = ['ID Lavorazione', 'Tag', 'Modello', 'Seriale', 'Stato', 'Data Ingresso', 'Guasto'];
+    const headers = [
+      'ID Lavorazione', 'Tag', 'Categoria', 'Modello', 'Seriale',
+      'Stato', 'Data Ingresso', 'Data Inizio Lavorazione',
+      'Data Attesa Parti', 'Data Ripresa Lavorazione',
+      'Data Rientro RMA', 'Data Chiusura', 'Guasto Dichiarato',
+      'Rientro da Staging', 'Diagnosi / Note Tecnico', 'Ricambi Utilizzati',
+      'Assegnato A', 'Urgente', 'Alimentatore', 'Dettagli RMA (Ticket/Data/Note)',
+      'Cronologia Stati (Stato:Data)'
+    ];
 
     const escape = (text) => {
-      if (text === null || text === undefined) return '""';
+      if (text === null || text === undefined || text === '') return '""';
       const str = String(text).replace(/"/g, '""').replace(/\n/g, ' ');
       return `"${str}"`;
     };
@@ -3014,22 +3407,39 @@ function KPIView({ masterData }) {
     const rows = raw.map(r => [
       r.id,
       r.tag,
+      r.category || 'Altro',
       r.model,
       r.serial,
       r.status,
-      r.dateIn,
-      r.faultDeclared
+      formatDateTime(r.dateIn, true),
+      r.dateStart ? formatDateTime(r.dateStart, true) : '',
+      r.datePartsMissing ? formatDateTime(r.datePartsMissing, true) : '',
+      r.dateResume ? formatDateTime(r.dateResume, true) : '',
+      r.dateRmaReturn ? formatDateTime(r.dateRmaReturn, true) : '',
+      r.dateOut ? formatDateTime(r.dateOut, true) : '',
+      r.faultDeclared,
+      r.stagingReturn ? 'SI' : 'NO',
+      r.techNotes || '',
+      r.replacedParts ? r.replacedParts.join(', ') : '',
+      r.assignedTo || '',
+      r.priorityClaim ? 'SI' : 'NO',
+      r.hasPowerSupply ? 'SI' : 'NO',
+      r.rmaInfo ? `Ticket: ${r.rmaInfo.ticket || '-'} | Data Invio: ${r.rmaInfo.dateSent ? formatDateTime(r.rmaInfo.dateSent, false) : '-'} | Note: ${r.rmaInfo.notes || '-'}` : '',
+      r.timeline && r.timeline.length > 0 ? r.timeline.map(t => `${t.status} (${formatDateTime(t.date, true)})`).join(' -> ') : ''
     ].map(escape).join(';'));
 
-    const csvContent = "data:text/csv;charset=utf-8,"
+    const csvContent = "data:text/csv;charset=utf-8,\uFEFF"
       + [headers.map(escape).join(';'), ...rows].join('\n');
 
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `techlab_export_${new Date().toISOString().split('T')[0]}.csv`);
+    // Use formatDateTime for filename (YYYYMMDD_HHmm)
+    const nowStr = formatDateTime(new Date().toISOString(), true).replace(/[\s/:]/g, '_');
+    link.setAttribute("download", `techlab_export_${nowStr}.csv`);
     document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
   };
 
   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
@@ -3268,7 +3678,7 @@ function KPIView({ masterData }) {
                       {r.count}
                     </span>
                   </td>
-                  <td className="p-3 text-gray-600 dark:text-gray-300">{new Date(r.lastDate).toLocaleDateString()}</td>
+                  <td className="p-3 text-gray-600 dark:text-gray-300">{formatDateTime(r.lastDate, false)}</td>
                   <td className="p-3 text-xs text-gray-500">{r.models}</td>
                 </tr>
               ))}
@@ -3507,7 +3917,7 @@ function MobileHome({ onSelectTicket }) {
               <h4 className="font-bold text-lg text-white mb-1">{r.model}</h4>
               <p className="text-sm text-slate-400 line-clamp-2 mb-3">"{r.faultDeclared}"</p>
               <div className="flex justify-between items-center text-xs text-slate-500 border-t border-slate-700 pt-3">
-                <div className="flex items-center gap-1"><Clock size={12} /> {new Date(r.dateIn).toLocaleDateString()}</div>
+                <div className="flex items-center gap-1"><Clock size={12} /> {formatDateTime(r.dateIn, false)}</div>
                 <div className="flex items-center gap-1 text-indigo-400 font-bold">Apri <ChevronRight size={14} /></div>
               </div>
             </div>
