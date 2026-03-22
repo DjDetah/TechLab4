@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight, X, Phone, Mail, MapPin,
   Camera, Save, Trash2, Clock, CheckCircle, AlertTriangle,
   Package, Truck, Wrench, Users, Activity, Settings, Link,
-  Download, ExternalLink, Filter, Calendar, MoreVertical, BrainCircuit, LayoutGrid, Minus, PlusCircle, PlayCircle, PauseCircle, Printer, Nfc, Zap, XCircle, AlertCircle, ArrowUp, ArrowDown, Edit2, Database, Upload
+  Download, ExternalLink, Filter, Calendar, MoreVertical, BrainCircuit, LayoutGrid, Minus, PlusCircle, PlayCircle, PauseCircle, Printer, Nfc, Zap, XCircle, AlertCircle, ArrowUp, ArrowDown, Edit2, Database, Upload, Award
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList
@@ -15,7 +15,7 @@ import QRCode from "react-qr-code";
 import { initializeApp } from "firebase/app";
 import {
   doc, getDoc, setDoc, updateDoc, addDoc, collection, getDocs, getFirestore,
-  query, orderBy, where, serverTimestamp, arrayUnion, arrayRemove, deleteDoc, writeBatch
+  query, orderBy, where, serverTimestamp, arrayUnion, arrayRemove, deleteDoc, writeBatch, increment
 } from "firebase/firestore";
 import {
   getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged
@@ -180,6 +180,22 @@ class RepairService {
     }
   }
 
+  // --- GAMIFICATION (V5.2) ---
+  async addXPToTechnician(usernameOrName, amount) {
+    if (!this.useFirebase || !usernameOrName) return;
+    try {
+      const users = await this.getAllUsers();
+      const user = users.find(u => u.username === usernameOrName || (u.name && u.name === usernameOrName) || u.email === usernameOrName);
+      if (user) {
+        await updateDoc(doc(db, "users", user.uid), {
+          xp: increment(amount)
+        });
+      }
+    } catch(e) {
+      console.error("Failed to add XP", e);
+    }
+  }
+
   // --- REPAIRS ---
 
   async getRepairs() {
@@ -225,6 +241,24 @@ class RepairService {
       logs: []
     };
     if (this.useFirebase) {
+      // V5.2 Recidivist Penalty logic
+      try {
+        const allRepairs = await this.getRepairs();
+        const prevRepairsForTag = allRepairs.filter(r => r.tag === data.tag && r.dateOut && r.assignedTo);
+        if (prevRepairsForTag.length > 0) {
+          prevRepairsForTag.sort((a, b) => new Date(b.dateOut) - new Date(a.dateOut));
+          const lastRepair = prevRepairsForTag[0];
+          const outDate = new Date(lastRepair.dateOut);
+          const daysDiff = (new Date() - outDate) / (1000 * 3600 * 24);
+          if (daysDiff <= 30 && lastRepair.assignedTo) {
+             console.log(`Penalty assigned to ${lastRepair.assignedTo} for returning asset ${data.tag}`);
+             await this.addXPToTechnician(lastRepair.assignedTo, -5);
+          }
+        }
+      } catch (e) {
+        console.error("Penalty check error", e);
+      }
+
       const docRef = await addDoc(collection(db, "repairs"), {
         ...newRepair,
         dateIn: serverTimestamp()
@@ -543,6 +577,106 @@ class RepairService {
       });
     });
   }
+
+  // --- HISTORICAL IMPORT (V5.0) ---
+  async importHistoricalRepairs(file) {
+    return new Promise((resolve, reject) => {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: async (results) => {
+          try {
+            if (!this.useFirebase) {
+              console.warn("Historical import only supported with Firebase enabled.");
+              resolve({ success: true, count: results.data.length, mock: true });
+              return;
+            }
+
+            const data = results.data;
+            if (data.length === 0) throw new Error("File CSV vuoto o formato non valido.");
+
+            // Date Parser (DD/MM/YYYY HH:mm -> ISO String)
+            const parseDate = (dateStr) => {
+              if (!dateStr || typeof dateStr !== 'string') return null;
+              const val = dateStr.trim();
+              if (!val) return null;
+              const match = val.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?/);
+              if (match) {
+                const [_, dd, mm, yyyy, hh = "12", min = "00"] = match;
+                return new Date(`${yyyy}-${mm}-${dd}T${hh}:${min}:00Z`).toISOString();
+              }
+              const d = new Date(val);
+              return isNaN(d.getTime()) ? null : d.toISOString();
+            };
+
+            const insertBatches = [];
+            let currentInsertBatch = writeBatch(db);
+            let insertCount = 0;
+            let validRows = 0;
+
+            data.forEach((row) => {
+              // CSV Keys exactly as generated from KPI export
+              const tag = (row['Tag'] || '').trim().toUpperCase();
+              if (tag && tag !== '-') {
+                const mappedData = {
+                  tag: tag,
+                  category: (row['Categoria'] || '').trim(),
+                  model: (row['Modello'] || '').trim(),
+                  serial: (row['Seriale'] || '').trim(),
+                  status: (row['Stato'] || '').trim() || 'Riparato',
+                  dateIn: parseDate(row['Data Ingresso']),
+                  dateStart: parseDate(row['Data Inizio Lavorazione']),
+                  datePartsMissing: parseDate(row['Data Attesa Parti']),
+                  dateResume: parseDate(row['Data Ripresa Lavorazione']),
+                  dateRmaReturn: parseDate(row['Data Rientro RMA']),
+                  dateOut: parseDate(row['Data Chiusura']),
+                  faultDeclared: (row['Guasto Dichiarato'] || '').trim(),
+                  techNotes: (row['Diagnosi / Note Tecnico'] || '').trim(),
+                  assignedTo: (row['Assegnato A'] || '').trim(),
+                  
+                  // Empty lists/objects for complex types
+                  timeline: [],
+                  replacedParts: [],
+                  rmaInfo: { ticket: '', dateSent: '', notes: '' },
+                  
+                  // Booleans
+                  stagingReturn: false,
+                  priorityClaim: false,
+                  hasPowerSupply: false
+                };
+
+                // Remove undefined/null values safely for Firebase
+                Object.keys(mappedData).forEach(k => mappedData[k] === null || mappedData[k] === undefined ? delete mappedData[k] : {});
+
+                // Create a completely new document with auto-generated ID
+                const docRef = doc(collection(db, "repairs"));
+                currentInsertBatch.set(docRef, mappedData);
+                insertCount++;
+                validRows++;
+
+                if (insertCount === 500) {
+                  insertBatches.push(currentInsertBatch.commit());
+                  currentInsertBatch = writeBatch(db);
+                  insertCount = 0;
+                }
+              }
+            });
+
+            if (insertCount > 0) insertBatches.push(currentInsertBatch.commit());
+            await Promise.all(insertBatches);
+
+            resolve({ success: true, count: validRows });
+          } catch (err) {
+            console.error("Historical Import Error:", err);
+            reject(err);
+          }
+        },
+        error: (error) => {
+          reject(error);
+        }
+      });
+    });
+  }
 }
 
 const service = new RepairService();
@@ -814,6 +948,28 @@ function Sidebar({ masterData }) {
         </div>
 
         <nav className="flex-1 px-2 md:px-4 space-y-1 mt-0">
+          {/* V5.2 User Level Bar (HIDDEN PER USER REQUEST UNTIL ANNOUNCEMENT) */}
+          {/*
+          {!collapsed && profile && (
+            <div className="px-2 mb-4 mt-2 animate-fade-in">
+              <div className="bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-900/40 dark:to-purple-900/40 p-3 rounded-xl border border-indigo-100 dark:border-indigo-800/60 shadow-sm relative overflow-hidden group hover:shadow-md transition-shadow">
+                <div className="flex justify-between items-end mb-1.5 relative z-10">
+                  <span className="text-sm font-black text-indigo-800 dark:text-indigo-300">Level {Math.floor((profile.xp || 0) / 500) + 1}</span>
+                  <span className="text-xs font-bold text-indigo-500">{profile.xp || 0} XP</span>
+                </div>
+                <div className="h-2 w-full bg-indigo-100/50 dark:bg-slate-700/50 rounded-full overflow-hidden relative z-10">
+                  <div 
+                    className="h-full bg-gradient-to-r from-indigo-400 to-purple-500 rounded-full transition-all duration-1000" 
+                    style={{ width: `${((profile.xp || 0) % 500) / 500 * 100}%` }}
+                  />
+                </div>
+                {/* Decoration * /}
+                <Award className="absolute -right-3 -bottom-3 text-indigo-500/10 w-16 h-16 transform -rotate-12 group-hover:scale-110 transition-transform" />
+              </div>
+            </div>
+          )}
+          */}
+
           {!collapsed && <h3 className="px-4 text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Workspace</h3>}
           <NavLink icon={LayoutDashboard} label="Dashboard" viewName="table" current={view} setView={setView} collapsed={collapsed} />
           {/* V4.2 Inventory */}
@@ -830,6 +986,7 @@ function Sidebar({ masterData }) {
               <div className={collapsed ? "mt-4 border-t border-gray-100 dark:border-slate-700 pt-4" : ""}>
                 <NavLink icon={Users} label="Team" viewName="team" current={view} setView={setView} collapsed={collapsed} />
                 <NavLink icon={Activity} label="KPI" viewName="kpi" current={view} setView={setView} collapsed={collapsed} />
+                <NavLink icon={Award} label="Leaderboard" viewName="leaderboard" current={view} setView={setView} collapsed={collapsed} />
                 <NavLink icon={Settings} label="Impostazioni" viewName="settings" current={view} setView={setView} collapsed={collapsed} />
               </div>
             </>
@@ -905,6 +1062,7 @@ const MainContent = ({ slaConfig, updateSLA, assignRules, updateAssignRules, mas
   if (view === 'team') return <TeamManagementView />;
   if (view === 'logistics') return <div className="p-10 text-center text-gray-400">Modulo Logistica in arrivo</div>;
   if (view === 'kpi') return <KPIView masterData={masterData} />;
+  if (view === 'leaderboard') return <LeaderboardView />;
   if (view === 'settings') return (
     <SettingsView
       slaConfig={slaConfig} onUpdate={updateSLA}
@@ -917,6 +1075,59 @@ const MainContent = ({ slaConfig, updateSLA, assignRules, updateAssignRules, mas
 
   return null;
 };
+
+// --- FEATURES: LEADERBOARD (V5.2) ---
+function LeaderboardView() {
+  const [users, setUsers] = useState([]);
+  
+  useEffect(() => {
+    service.getAllUsers().then(u => {
+      // Sort by XP descending, exclude managers unless they have XP? (Keep all for now)
+      const validUsers = u.filter(user => user.role !== 'manager' || user.xp > 0);
+      const sorted = validUsers.sort((a,b) => (b.xp || 0) - (a.xp || 0));
+      setUsers(sorted);
+    });
+  }, []);
+
+  return (
+    <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg border border-gray-100 dark:border-slate-700 p-8 max-w-4xl mx-auto animate-fade-in">
+      <div className="text-center mb-10">
+        <h2 className="text-3xl font-black flex items-center justify-center gap-3 text-indigo-700 dark:text-indigo-400 uppercase tracking-tight">
+          <Award size={36} className="text-yellow-500" /> Leaderboard Tecnici
+        </h2>
+        <p className="text-gray-500 mt-2 font-medium">Classifica globale dei punti (XP) accumulati con le riparazioni</p>
+      </div>
+
+      <div className="flex flex-col gap-4 relative">
+        {users.length === 0 && <div className="text-center text-gray-400 py-10">Nessun dato XP disponibile.</div>}
+        
+        {users.map((u, i) => {
+          const xp = u.xp || 0;
+          const level = Math.floor(xp / 500) + 1;
+          const isTop3 = i < 3;
+          
+          return (
+            <div key={u.uid} className={`flex items-center gap-5 p-4 rounded-2xl border transition-transform hover:-translate-y-1 hover:shadow-lg ${isTop3 ? 'bg-gradient-to-r from-yellow-50 to-orange-50 border-yellow-200 dark:from-yellow-900/20 dark:to-orange-900/10 dark:border-yellow-700/50 shadow-sm relative z-10' : 'bg-gray-50 border-gray-100 dark:bg-slate-700/30 dark:border-slate-700/50'}`}>
+              <div className={`w-14 h-14 rounded-full flex items-center justify-center font-black text-xl flex-shrink-0 shadow-inner ${i === 0 ? 'bg-gradient-to-tr from-yellow-400 to-yellow-300 text-yellow-900 border-2 border-yellow-200' : i === 1 ? 'bg-gradient-to-tr from-gray-300 to-gray-200 text-gray-700 border-2 border-gray-100' : i === 2 ? 'bg-gradient-to-tr from-orange-400 to-orange-300 text-orange-900 border-2 border-orange-200' : 'bg-white dark:bg-slate-800 text-gray-400 border-2 border-dashed border-gray-200 dark:border-slate-600'}`}>
+                #{i+1}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-black text-xl text-gray-800 dark:text-white truncate">{u.username || u.name || u.email}</div>
+                <div className={`text-xs uppercase tracking-wider font-bold mt-1 ${isTop3 ? 'text-orange-600 dark:text-orange-400' : 'text-gray-500'}`}>Livello {level}</div>
+              </div>
+              <div className="text-right px-4">
+                <div className={`text-4xl font-black ${isTop3 ? 'text-transparent bg-clip-text bg-gradient-to-r from-orange-500 to-yellow-500' : 'text-indigo-600 dark:text-indigo-400'}`}>
+                  {xp}
+                </div>
+                <div className="text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">XP Totali</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 // --- FEATURES: TEAM ---
 function TeamManagementView() {
@@ -1231,7 +1442,42 @@ function SettingsView({ slaConfig, onUpdate, assignRules, onUpdateRules, masterD
           </div>
         )}
 
-        {/* SECTION 5: DANGER ZONE (Manager Only) */}
+        {/* SECTION 5: HISTORICAL IMPORT (V5.0) */}
+        {profile?.role === 'manager' && (
+          <div className="pt-8 border-t dark:border-slate-700">
+            <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><Upload className="text-emerald-400" /> Storico Lavorazioni</h3>
+            <div className="bg-emerald-50 dark:bg-emerald-900/10 p-6 rounded-xl border border-emerald-100 dark:border-emerald-900/30">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h4 className="font-bold text-emerald-900 dark:text-emerald-300">Importa Storico da Excel/CSV</h4>
+                  <p className="text-sm text-emerald-700/80 dark:text-emerald-400/80 mt-1">
+                    Carica il file estrattivo KPI formattato per aggiungere le referenze storiche passate.<br/>
+                    <strong>Attenzione:</strong> Questa operazione <span className="underline">aggiunge</span> i ticket, generando nuovi ID. Cerca di non duplicare le ricariche.
+                  </p>
+                </div>
+                <label className="cursor-pointer px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg transition-colors shadow-sm flex items-center gap-2">
+                  <Upload size={18} /> Importa Storico
+                  <input type="file" accept=".csv" className="hidden" onChange={async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    if (!confirm(`Procedere con l'importazione dei record da "${file.name}"? Questo aggiungerà nuovi dati al database.`)) return;
+
+                    try {
+                      alert("Importazione avviata, l'operazione richiede alcuni secondi...");
+                      const result = await service.importHistoricalRepairs(file);
+                      alert(`Storico caricato con successo! ${result.count} nuovi record riparazioni inseriti.`);
+                    } catch (err) {
+                      alert(`Errore durante l'importazione: ${err.message}`);
+                    }
+                    e.target.value = null; // reset input
+                  }} />
+                </label>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SECTION 6: DANGER ZONE (Manager Only) */}
         {profile?.role === 'manager' && (
           <div className="pt-8 border-t border-red-100 dark:border-red-900/30">
             <h3 className="text-lg font-bold text-red-600 mb-4 flex items-center gap-2"><AlertTriangle /> Zona Pericolo</h3>
@@ -1379,9 +1625,102 @@ function PartCategorySettings({ categories, onUpdate }) {
   );
 }
 
+// --- NEW COMPONENT: MISSING PARTS MODAL (V5.1) ---
+function MissingPartsModal({ repair, inventory = [], onClose, onConfirm }) {
+  // Filter compatible parts
+  const isCompatible = (part) => {
+    const matchesModel = part.compatibleModels && part.compatibleModels.some(
+      m => m.toLowerCase().trim() === (repair.model || '').toLowerCase().trim()
+    );
+
+    if (part.compatibleModels && part.compatibleModels.length > 0) {
+      // Se ci sono modelli specifici, DEVE matchare
+      return matchesModel;
+    }
+
+    if (part.compatibleAssetCategory) {
+      // Se ha una categoria ma nessun modello, vale per tutta la categoria
+      return part.compatibleAssetCategory === repair.category;
+    }
+
+    // Se non ha né categoria né modelli, è universale
+    return true;
+  };
+
+  const compatibleParts = inventory.filter(isCompatible);
+  const [selectedParts, setSelectedParts] = useState([]);
+
+  const togglePart = (part) => {
+    if (selectedParts.find(p => p.id === part.id)) {
+      setSelectedParts(selectedParts.filter(p => p.id !== part.id));
+    } else {
+      setSelectedParts([...selectedParts, part]);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] flex flex-col overflow-hidden animate-fade-in-up" onClick={e => e.stopPropagation()}>
+        <div className="p-6 border-b border-gray-200 dark:border-slate-700 flex justify-between items-center bg-gray-50 dark:bg-slate-900">
+          <h2 className="text-xl font-bold flex items-center gap-2 text-gray-800 dark:text-white">
+            <Wrench className="text-orange-500" />
+            Dichiara Parti Mancanti
+          </h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-full transition-colors">
+            <X size={24} className="text-gray-500" />
+          </button>
+        </div>
+
+        <div className="p-6 overflow-y-auto flex-1 bg-gray-50 dark:bg-slate-900/50">
+          <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+            Seleziona i ricambi necessari per completare la riparazione del <strong className="text-indigo-600 dark:text-indigo-400">{repair.model}</strong>. 
+            Verrà segnalata la carenza al magazzino.
+          </p>
+
+          <div className="space-y-2">
+            {compatibleParts.length === 0 ? (
+              <div className="p-4 bg-orange-50 border border-orange-200 rounded text-orange-700 text-sm">
+                Nessun ricambio compatibile trovato per questo modello. Puoi comunque procedere senza specificare le parti.
+              </div>
+            ) : (
+              compatibleParts.map(part => (
+                <label key={part.id} className="flex items-center gap-3 p-3 bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-lg cursor-pointer hover:border-indigo-500 transition-colors shadow-sm">
+                  <input
+                    type="checkbox"
+                    className="w-5 h-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    checked={!!selectedParts.find(p => p.id === part.id)}
+                    onChange={() => togglePart(part)}
+                  />
+                  <div className="flex-1">
+                    <div className="font-bold text-sm text-gray-800 dark:text-gray-200">{part.name}</div>
+                    <div className="text-xs text-gray-400 flex justify-between">
+                      <span>{part.category}</span>
+                      {part.quantity <= 0 ? <span className="text-red-500 font-bold">Esaurito (0)</span> : <span>Giacenza: {part.quantity}</span>}
+                    </div>
+                  </div>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="p-6 border-t border-gray-200 dark:border-slate-700 flex justify-end gap-3 bg-white dark:bg-slate-800">
+          <button onClick={onClose} className="px-4 py-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-slate-700 rounded-lg transition-colors font-medium">Annulla</button>
+          <button 
+            onClick={() => onConfirm(selectedParts)}
+            className="px-6 py-2 bg-orange-500 hover:bg-orange-600 text-white font-bold rounded-lg shadow-md transition-transform active:scale-95 flex items-center gap-2"
+          >
+            Sposta in Attesa Parti
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- FEATURES: REPAIR DETAIL ---
 function RepairDetailView({ repair: initialRepair, onClose, load, masterData, onUpdateMasterData }) {
-  const { profile } = useContext(AuthContext);
+  const { profile, refreshProfile } = useContext(AuthContext);
   // Use local state for optimistic UI updates
   const [repair, setRepair] = useState(initialRepair);
 
@@ -1401,6 +1740,11 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
 
   // Local state for tech notes editing
   const [techNotes, setTechNotes] = useState('');
+  const [showMissingPartsModal, setShowMissingPartsModal] = useState(false);
+  
+  // V5.2 Gamification state
+  const [xpEarned, setXpEarned] = useState(0);
+  const [showXpBadge, setShowXpBadge] = useState(false);
 
   // V4.8 Maglaser state
   const [maglaserData, setMaglaserData] = useState(null);
@@ -1479,6 +1823,31 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
     if (newStatus === 'In Lavorazione' && !repair.assignedTo) {
       // V4.1: Use Username if available
       extra.assignedTo = profile?.username || profile?.name || profile?.email || 'Tecnico';
+    }
+
+    // V5.1 CLAIM DECREMENT
+    if (newStatus === 'Riparato' && repair.missingParts && repair.missingParts.length > 0) {
+      const currentInventory = masterData?.inventory || [];
+      
+      const updatedInventory = currentInventory.map(part => {
+        const wasMissing = repair.missingParts.find(p => p.partId === part.id);
+        if (wasMissing && part.claim > 0) {
+          return { ...part, claim: part.claim - 1 };
+        }
+        return part;
+      });
+      
+      extra.missingParts = null; // Clear the dependency
+      await onUpdateMasterData({ ...masterData, inventory: updatedInventory });
+    }
+
+    // V5.2 GAMIFICATION XP REWARD
+    if (newStatus === 'Riparato' && repair.status !== 'Riparato') {
+      const xpReward = repair.priorityClaim ? 100 : 50;
+      await service.addXPToTechnician(repair.assignedTo || profile?.username || profile?.name || profile?.email, xpReward);
+      setXpEarned(xpReward);
+      setShowXpBadge(true); // defined below
+      setTimeout(() => refreshProfile(), 500); // Async sync context
     }
 
     await service.updateStatus(repair.id, newStatus, extra);
@@ -1905,7 +2274,7 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
               {repair.status === 'In Lavorazione' && (
                 <>
                   <ActionButton label="Avvia Staging / OS" onClick={() => handleStatusUpdate('Staging')} className="border-indigo-200 bg-indigo-50 text-indigo-700" />
-                  <ActionButton label="Pezzi di Ricambio" onClick={() => handleStatusUpdate('Attesa Parti')} />
+                  <ActionButton label="Pezzi di Ricambio" onClick={() => setShowMissingPartsModal(true)} />
                   <ActionButton label="Riparazione Completata" onClick={() => handleStatusUpdate('Riparato')} primary className="col-span-2" />
                   <ActionButton label="Spedisci a Service Esterno (RMA)" onClick={() => setRmaMode(true)} className="col-span-2 border-orange-500 text-orange-600" />
                 </>
@@ -1973,6 +2342,69 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
           </div>
         )
       }
+
+      {/* XP CELEBRATION BADGE (V5.2) - HIDDEN PER USER REQUEST */}
+      {/*
+      {showXpBadge && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm px-4" onClick={() => setShowXpBadge(false)}>
+          <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-2xl p-8 flex flex-col items-center transform animate-bounce-short border-4 border-yellow-400 relative overflow-hidden" onClick={e => e.stopPropagation()}>
+            <button className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" onClick={() => setShowXpBadge(false)}>
+              <X size={24} />
+            </button>
+            <div className="bg-gradient-to-br from-yellow-300 to-yellow-500 text-white p-5 rounded-full mb-6 shadow-inner ring-4 ring-yellow-100">
+              <Award size={56} className="drop-shadow-md" />
+            </div>
+            <h2 className="text-3xl font-black text-gray-800 dark:text-white mb-2 text-center uppercase tracking-tight">Ottimo Lavoro!</h2>
+            <p className="text-gray-500 dark:text-gray-400 text-center font-medium bg-gray-50 dark:bg-slate-900 px-4 py-2 rounded-lg">Riparazione completata con successo</p>
+            <div className="mt-8 mb-2 text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-orange-500 to-yellow-400 filter drop-shadow hover:scale-110 transition-transform cursor-default">
+              +{xpEarned} <span className="text-3xl">XP</span>
+            </div>
+            <div className="w-full text-center text-xs font-bold text-gray-400 uppercase tracking-widest mt-4 pt-4 border-t border-dashed border-gray-200 dark:border-slate-700">
+              Punti accreditati al profilo
+            </div>
+          </div>
+        </div>
+      )}
+      */}
+
+      {/* MISSING PARTS MODAL (V5.1) */}
+      {showMissingPartsModal && (
+        <MissingPartsModal
+          repair={repair}
+          inventory={masterData?.inventory || []}
+          onClose={() => setShowMissingPartsModal(false)}
+          onConfirm={async (selectedParts) => {
+            setShowMissingPartsModal(false);
+            
+            const missingPartsSummary = selectedParts.map(p => ({
+              partId: p.id,
+              name: p.name,
+              category: p.category
+            }));
+
+            const claimList = missingPartsSummary.map(p => `- ${p.name}`).join('\n');
+            const noteUpdate = claimList ? `[Ricambi Richiesti per Attesa Parti]\n${claimList}\n\n` : '';
+
+            // 1. Update Repair
+            await handleStatusUpdate('Attesa Parti', {
+              missingParts: missingPartsSummary,
+              techNotes: (noteUpdate + techNotes).trim()
+            });
+
+            // 2. Update Inventory Claims
+            if (selectedParts.length > 0) {
+              const currentInventory = masterData?.inventory || [];
+              const updatedInventory = currentInventory.map(part => {
+                if (selectedParts.find(p => p.id === part.id)) {
+                  return { ...part, claim: (part.claim || 0) + 1 };
+                }
+                return part;
+              });
+              onUpdateMasterData({ ...masterData, inventory: updatedInventory });
+            }
+          }}
+        />
+      )}
 
       {/* REASSIGN MODAL (V4.1) */}
       {
@@ -2628,6 +3060,7 @@ function InventoryView({ masterData, onUpdateMasterData }) {
               <th className="p-3">Nome Ricambio</th>
               <th className="p-3">Categoria</th>
               <th className="p-3 text-center">Quantità</th>
+              <th className="p-3 text-center">In Attesa (Claim)</th>
               <th className="p-3 text-center">Soglia Minima</th>
               <th className="p-3 text-right">Azioni</th>
             </tr>
@@ -2649,6 +3082,15 @@ function InventoryView({ masterData, onUpdateMasterData }) {
                       <span className={`font-bold w-12 text-center ${isLow ? 'text-red-600' : 'text-gray-700 dark:text-gray-200'}`}>{part.quantity}</span>
                       <button onClick={() => updateQty(part.id, 1)} className="p-1 hover:bg-gray-200 rounded text-gray-500"><Plus size={14} /></button>
                     </div>
+                  </td>
+                  <td className="p-3 text-center">
+                    {part.claim > 0 ? (
+                      <span className="font-bold text-orange-600 bg-orange-100 dark:bg-orange-900/30 px-2 py-1 rounded">
+                        {part.claim}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )}
                   </td>
                   <td className="p-3 text-center text-gray-400">{part.min_quantity}</td>
                   <td className="p-3 text-right">
@@ -3351,20 +3793,23 @@ function KPIView({ masterData }) {
       active: filters.model === m
     })).sort((a, b) => b.count - a.count);
 
-    // 5. Recidivists (Assets with > 1 entry in last 30 days)
+    // 5. Recidivists (Assets with > 1 entry globally, and AT LEAST 1 in last 30 days)
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     const thirtyDaysAgoIso = thirtyDaysAgo.toISOString().split('T')[0];
 
-    // Filter ANY repair in last 30 days (ignoring other filters for this specific KPI to show global recidivism? 
-    // Or should it respect filters? User said "in 30 giorni", implying a global check. 
-    // Let's use 'raw' data restricted by time only, to be accurate about "recidivism" regardless of current UI filters.)
-    const recentRepairs = raw.filter(r => r.dateIn >= thirtyDaysAgoIso);
+    // Identify which tags have appeared recently
+    const tagsInLast30Days = new Set(
+      raw.filter(r => r.dateIn >= thirtyDaysAgoIso)
+         .map(r => (r.tag || '').toUpperCase().trim())
+         .filter(t => t && t !== '-')
+    );
 
     const tagCounts = {};
-    recentRepairs.forEach(r => {
+    // Calculate global history counts for those recent tags
+    raw.forEach(r => {
       const tag = (r.tag || '').toUpperCase().trim();
-      if (tag && tag !== '-') { // Ignore empty or dash tags
+      if (tag && tag !== '-' && tagsInLast30Days.has(tag)) {
         if (!tagCounts[tag]) {
           tagCounts[tag] = { count: 0, models: new Set(), lastDate: r.dateIn, id: r.id };
         }
@@ -3648,7 +4093,7 @@ function KPIView({ masterData }) {
       <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm flex flex-col space-y-4">
         <h3 className="text-sm font-bold uppercase text-gray-400 flex items-center gap-2">
           <AlertTriangle size={16} className="text-orange-500" />
-          Recidivi ( &gt; 1 Ingresso in 30 Giorni)
+          Recidivi (Asset rientrati negli ultimi 30 giorni con Storico &gt; 1)
         </h3>
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
