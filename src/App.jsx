@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight, X, Phone, Mail, MapPin,
   Camera, Save, Trash2, Clock, CheckCircle, AlertTriangle,
   Package, Truck, Wrench, Users, Activity, Settings, Link,
-  Download, ExternalLink, Filter, Calendar, MoreVertical, BrainCircuit, LayoutGrid, Minus, PlusCircle, PlayCircle, PauseCircle, Printer, Nfc, Zap, XCircle, AlertCircle, ArrowUp, ArrowDown, Edit2, Database, Upload, Award, RotateCcw
+  Download, ExternalLink, Filter, Calendar, MoreVertical, BrainCircuit, LayoutGrid, Minus, PlusCircle, PlayCircle, PauseCircle, Printer, Nfc, Zap, XCircle, AlertCircle, ArrowUp, ArrowDown, Edit2, Database, Upload, Award, RotateCcw, TrendingUp, TrendingDown
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList, AreaChart, Area, LineChart, Line, ReferenceLine
@@ -94,6 +94,7 @@ const STATUS_FLOW = {
 const ALL_STATUSES = Object.keys(STATUS_FLOW);
 
 const INITIAL_SETTINGS = {
+  targetGiornaliero: 0,
   categories: ['Laptop', 'Desktop', 'Server', 'Mobile', 'Tablet'],
   models: ['ThinkPad X1', 'MacBook Pro', 'Dell XPS', 'iPhone 15', 'Galaxy S24'],
 
@@ -772,7 +773,13 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(false);
 
   // Navigation State
-  const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('view') === 'videowall' ? 'videowall' : 'table');
+  const [view, setView] = useState(() => {
+    const v = new URLSearchParams(window.location.search).get('view');
+    if (v === 'videowall') return 'videowall';
+    if (v === 'videowall2') return 'videowall2';
+    if (v === 'videowall3') return 'videowall3';
+    return 'table';
+  });
   const [sidebarOpen, setSidebarOpen] = useState(false); // Mobile drawer
   const [collapsed, setCollapsed] = useState(false); // Desktop sidebar collapse
 
@@ -856,6 +863,10 @@ export default function App() {
           </MobileOperatorLayout>
         ) : view === 'videowall' ? (
           <VideoWallView />
+        ) : view === 'videowall2' ? (
+          <VideoWallLabView />
+        ) : view === 'videowall3' ? (
+          <VideoWall3View />
         ) : (
           <div className="flex h-screen bg-gray-50 text-gray-900 dark:bg-slate-900 dark:text-gray-100 font-sans transition-colors">
             <Sidebar masterData={masterData} />
@@ -1253,6 +1264,25 @@ function SettingsView({ slaConfig, onUpdate, assignRules, onUpdateRules, masterD
       </h2>
 
       <div className="space-y-8">
+
+        {/* SECTION 0: TARGET LABORATORIO (Manager Only) */}
+        {profile?.role === 'manager' && (
+          <div className="space-y-4 mb-8">
+            <h3 className="text-lg font-bold flex items-center gap-2"><Activity className="text-indigo-400" /> Target Riparazioni</h3>
+            <div className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 p-4 rounded-xl flex items-center gap-4">
+              <div className="flex-1">
+                <p className="font-bold text-gray-800 dark:text-gray-200">Target Giornaliero Completate</p>
+                <p className="text-xs text-gray-500">Valore numerico usato nel VideoWall Laboratorio per calcolare lo scostamento.</p>
+              </div>
+              <input
+                type="number"
+                className="input w-32 text-center text-lg font-bold py-2"
+                value={localMaster.targetGiornaliero || 0}
+                onChange={(e) => handleMasterDataUpdate('targetGiornaliero', parseInt(e.target.value) || 0)}
+              />
+            </div>
+          </div>
+        )}
 
         {/* SECTION 1: SLA (Manager Only) */}
         {profile?.role === 'manager' && (
@@ -4984,6 +5014,343 @@ function VideoWallView() {
               </div>
             )}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- SHARED UI COMPONENTS FOR VIDEOWALLS ---
+const LabCard = ({ title, value, icon: Icon, colorClass, valueClass = "text-8xl", titleClass = "text-xl text-slate-300", className = "" }) => (
+  <div className={`bg-slate-800 rounded-2xl p-6 border shadow-lg flex flex-col justify-between h-full relative overflow-hidden ${colorClass} ${className}`}>
+    <div className="flex justify-between items-start relative z-10">
+      <h3 className={`${titleClass} font-bold uppercase tracking-wider`}>{title}</h3>
+      <div className="p-3 rounded-full bg-slate-900/50 backdrop-blur-sm">
+        <Icon size={32} />
+      </div>
+    </div>
+    <div className="mt-8 relative z-10 flex-1 flex items-end">
+      <span className={`${valueClass} font-black leading-none drop-shadow-md`}>{value}</span>
+    </div>
+    {/* Subtle background glow */}
+    <div className="absolute -bottom-10 -right-10 opacity-10 pointer-events-none">
+      <Icon size={200} />
+    </div>
+  </div>
+);
+
+const CompletatePerformanceCard = ({ completate, target, scostamento, className = "", valueClass = "text-[12rem]" }) => {
+  const isPositive = scostamento > 0;
+  const isNegative = scostamento < 0;
+
+  let Icon = Activity;
+  let scostamentoColor = "text-blue-400";
+  let scostamentoBg = "bg-blue-900/10 border-blue-500/30";
+  
+  if (isPositive) {
+    scostamentoColor = "text-emerald-400";
+    scostamentoBg = "bg-emerald-900/20 border-emerald-500/50 shadow-[0_0_30px_rgba(16,185,129,0.15)]";
+    Icon = TrendingUp;
+  } else if (isNegative) {
+    scostamentoColor = "text-orange-400";
+    scostamentoBg = "bg-orange-900/20 border-orange-500/50 shadow-[0_0_30px_rgba(249,115,22,0.15)]";
+    Icon = TrendingDown;
+  }
+
+  return (
+    <div className={`bg-slate-800 rounded-2xl p-6 border border-emerald-500/50 shadow-[0_0_50px_rgba(16,185,129,0.1)] flex flex-col justify-between h-full relative overflow-hidden ${className}`}>
+      <div className="flex justify-between items-start relative z-10 mb-4">
+        <h3 className="text-3xl font-bold uppercase tracking-wider text-emerald-400">Completate</h3>
+        <div className="p-3 rounded-full bg-emerald-900/50 backdrop-blur-sm">
+          <CheckCircle size={32} className="text-emerald-400" />
+        </div>
+      </div>
+      
+      <div className="flex-1 flex items-end relative z-10 gap-8">
+        {/* Main Completate Total */}
+        <div className="flex-1 flex items-end">
+          <span className={`${valueClass} font-black leading-none drop-shadow-md text-emerald-400 tracking-tighter`}>{completate}</span>
+        </div>
+
+        {/* Sub-section: Target & Scostamento */}
+        <div className={`w-[280px] rounded-2xl p-5 border flex flex-col justify-between transition-colors duration-1000 ${scostamentoBg}`}>
+           <div className="flex justify-between items-center mb-4">
+             <span className="text-xs font-bold uppercase tracking-widest text-slate-300">Performance</span>
+             <Icon size={24} className={scostamentoColor} />
+           </div>
+           <div className="flex flex-col gap-4">
+             <div className="flex flex-col border-b border-white/10 pb-3">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Target Giornaliero</span>
+                <span className="text-5xl font-black leading-none text-slate-200">{target}</span>
+             </div>
+             <div className="flex flex-col pt-1">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Scostamento</span>
+                <span className={`text-6xl font-black leading-none drop-shadow-lg ${scostamentoColor}`}>
+                  {scostamento > 0 ? `+${scostamento}` : scostamento}
+                </span>
+             </div>
+           </div>
+        </div>
+      </div>
+
+      {/* Subtle background glow */}
+      <div className="absolute -bottom-20 -left-10 opacity-[0.03] pointer-events-none text-emerald-500">
+        <CheckCircle size={400} />
+      </div>
+    </div>
+  );
+};
+
+const RepairedTodayCard = ({ repairs, className="", title="Riparati Oggi" }) => {
+  const repairedTodayList = useMemo(() => {
+    const todayStr = new Date().toDateString();
+    return repairs.filter(r => (r.status === 'Riparato' || r.status === 'Spedito') && r.dateOut && new Date(r.dateOut).toDateString() === todayStr);
+  }, [repairs]);
+
+  const repairedGroups = useMemo(() => {
+    const groups = {};
+    repairedTodayList.forEach(r => {
+      const cat = r.category || 'Altro';
+      groups[cat] = (groups[cat] || 0) + 1;
+    });
+    return groups;
+  }, [repairedTodayList]);
+
+  return (
+    <div className={`bg-slate-800 rounded-2xl p-6 border shadow-lg flex flex-col h-full relative overflow-hidden border-emerald-500/30 ${className}`}>
+      <div className="flex justify-between items-center relative z-10 mb-6">
+        <h3 className="text-3xl font-black uppercase tracking-wider flex items-center gap-4 text-emerald-400">
+          <Zap size={32} /> 
+          {title}
+        </h3>
+        <span className="text-emerald-400 bg-emerald-400/10 px-4 py-1.5 rounded-xl text-3xl font-bold">{repairedTodayList.length}</span>
+      </div>
+      
+      <div className="flex-1 flex flex-col justify-center space-y-4 relative z-10">
+        {Object.entries(repairedGroups).length > 0 ? (
+          <div className="grid gap-4">
+            {Object.entries(repairedGroups).sort(([a],[b]) => a.localeCompare(b)).map(([cat, count]) => (
+              <div key={cat} className="flex justify-between items-center gap-4 bg-slate-900/60 p-5 rounded-2xl border border-slate-700/50 shadow-inner animate-fade-in">
+                <span className="text-xl font-black uppercase tracking-widest text-slate-300 truncate">{cat}</span>
+                <span className="text-emerald-400 bg-emerald-400/10 px-5 py-2 rounded-xl border border-emerald-500/20 text-2xl font-black shrink-0">
+                  x {count}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center text-slate-600 font-bold text-xl gap-6 text-center">
+             <Package size={64} className="opacity-30 text-emerald-500/30" />
+             <p>Nessun apparato completato oggi.</p>
+          </div>
+        )}
+      </div>
+      {/* Subtle background glow */}
+      <div className="absolute -bottom-20 -right-10 opacity-[0.03] pointer-events-none text-emerald-500">
+        <Zap size={400} />
+      </div>
+    </div>
+  );
+};
+
+// --- FEATURES: VIDEOWALL LAB (V5.5) ---
+function VideoWallLabView() {
+  const [repairs, setRepairs] = useState([]);
+  const [targetGiornaliero, setTargetGiornaliero] = useState(0);
+  const [time, setTime] = useState(new Date());
+
+  useEffect(() => {
+    let active = true;
+    const fetchData = async () => {
+      try {
+        const [data, settings] = await Promise.all([
+          service.getRepairs(),
+          service.getSettings()
+        ]);
+        if (active) {
+          setRepairs(data || []);
+          setTargetGiornaliero(settings.targetGiornaliero || 0);
+        }
+      } catch (e) {
+        console.error("VideoWallLab Failed to fetch data:", e);
+      }
+    };
+    fetchData(); // run immediately
+    const poller = setInterval(fetchData, 15 * 60 * 1000); // 15 mins
+    return () => { active = false; clearInterval(poller); };
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const stats = useMemo(() => {
+    const todayStr = new Date().toDateString();
+    
+    // 1. In Attesa Diagnosi
+    const ingresso = repairs.filter(r => r.status === 'Ingresso').length;
+    // 2. Lavorate (Data inizio lavorazione odierna)
+    const lavorate = repairs.filter(r => r.dateStart && new Date(r.dateStart).toDateString() === todayStr).length;
+    // 3. In lavorazione
+    const inLavorazione = repairs.filter(r => r.status === 'In Lavorazione').length;
+    // 4. Attesa Parti
+    const attesaParti = repairs.filter(r => r.status === 'Attesa Parti').length;
+    // 5. Preinstallazione e Test
+    const staging = repairs.filter(r => r.status === 'Staging').length;
+    // 6. Completate (Data Chiusura odierna)
+    const completate = repairs.filter(r => (r.status === 'Riparato' || r.status === 'Spedito') && r.dateOut && new Date(r.dateOut).toDateString() === todayStr).length;
+    // 9. Backlog
+    const backlog = ingresso + inLavorazione + attesaParti + staging;
+
+    return {
+      ingresso,
+      lavorate,
+      inLavorazione,
+      attesaParti,
+      staging,
+      completate,
+      target: targetGiornaliero,
+      scostamento: completate - targetGiornaliero,
+      backlog
+    };
+  }, [repairs, targetGiornaliero]);
+
+  const formattedDate = time.toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+  const timeString = time.toLocaleTimeString();
+
+  return (
+    <div className="min-h-screen bg-slate-900 text-white p-6 font-sans overflow-hidden flex flex-col">
+      {/* HEADER */}
+      <div className="flex justify-between items-center mb-8 px-2">
+        <div className="flex items-center gap-6">
+          <div className="bg-white/10 p-3 rounded-[2rem] border border-white/10 shadow-[0_0_40px_rgba(255,255,255,0.05)] backdrop-blur-md h-20 xl:h-24 flex items-center justify-center overflow-hidden">
+            <img src="/mvs-logo.png" alt="MVS Logo" className="h-full w-auto object-contain" />
+          </div>
+          <div>
+            <h1 className="text-5xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 mb-1">TECHLAB</h1>
+            <div className="text-indigo-400 font-bold uppercase tracking-[0.4em] text-md">Live Dashboard</div>
+          </div>
+        </div>
+        <div className="flex flex-col items-end">
+          <div className="text-xl text-slate-400 capitalize font-mono mb-1 tracking-wide">{formattedDate}</div>
+          <div className="text-7xl font-black font-mono tracking-tighter bg-clip-text text-transparent bg-gradient-to-br from-white to-slate-500 drop-shadow-[0_4px_20px_rgba(0,0,0,0.5)] leading-none">
+            {time.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}
+            <span className="text-4xl text-slate-500 ml-2 animate-pulse">: {time.getSeconds().toString().padStart(2, '0')}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col gap-6">
+        {/* ROW 1: 5 CARDS */}
+        <div className="grid grid-cols-5 gap-6 flex-1 min-h-0">
+          <LabCard title="In Attesa Diagnosi" value={stats.ingresso} icon={Package} colorClass="border-orange-500/50 text-orange-400" />
+          <LabCard title="In Lavorazione" value={stats.inLavorazione} icon={Wrench} colorClass="border-indigo-500/50 text-indigo-400" />
+          <LabCard title="Attesa Parti" value={stats.attesaParti} icon={Clock} colorClass="border-blue-500/50 text-blue-400" />
+          <LabCard title="Preinstallazione" value={stats.staging} icon={LayoutGrid} colorClass="border-cyan-500/50 text-cyan-400" />
+          <LabCard title="Lavorate (Oggi)" value={stats.lavorate} icon={PlayCircle} colorClass="border-slate-500/50 text-slate-400" />
+        </div>
+
+        {/* ROW 2: 2 CARDS (grid-cols-2) */}
+        <div className="grid grid-cols-2 gap-6 flex-[1.2] min-h-0">
+          <CompletatePerformanceCard completate={stats.completate} target={stats.target} scostamento={stats.scostamento} />
+          <LabCard title="Backlog Lab" value={stats.backlog} icon={Database} colorClass="border-purple-500/50 text-purple-400" valueClass="text-[12rem]" titleClass="text-3xl text-purple-400" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- FEATURES: VIDEOWALL LAB 3 (V5.6) ---
+function VideoWall3View() {
+  const [repairs, setRepairs] = useState([]);
+  const [targetGiornaliero, setTargetGiornaliero] = useState(0);
+  const [time, setTime] = useState(new Date());
+
+  useEffect(() => {
+    let active = true;
+    const fetchData = async () => {
+      try {
+        const [data, settings] = await Promise.all([
+          service.getRepairs(),
+          service.getSettings()
+        ]);
+        if (active) {
+          setRepairs(data || []);
+          setTargetGiornaliero(settings.targetGiornaliero || 0);
+        }
+      } catch (e) {
+        console.error("VideoWall3 Failed to fetch data:", e);
+      }
+    };
+    fetchData(); // run immediately
+    const poller = setInterval(fetchData, 15 * 60 * 1000); // 15 mins
+    return () => { active = false; clearInterval(poller); };
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const stats = useMemo(() => {
+    const todayStr = new Date().toDateString();
+    
+    const inLavorazione = repairs.filter(r => r.status === 'In Lavorazione').length;
+    const staging = repairs.filter(r => r.status === 'Staging').length;
+    const lavorate = repairs.filter(r => r.dateStart && new Date(r.dateStart).toDateString() === todayStr).length;
+    const attesaPartiOggi = repairs.filter(r => r.status === 'Attesa Parti' && r.datePartsMissing && new Date(r.datePartsMissing).toDateString() === todayStr).length;
+    const completate = repairs.filter(r => (r.status === 'Riparato' || r.status === 'Spedito') && r.dateOut && new Date(r.dateOut).toDateString() === todayStr).length;
+
+    return {
+      inLavorazione,
+      staging,
+      lavorate,
+      attesaPartiOggi,
+      completate,
+      target: targetGiornaliero,
+      scostamento: completate - targetGiornaliero,
+    };
+  }, [repairs, targetGiornaliero]);
+
+  const formattedDate = time.toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+  const timeString = time.toLocaleTimeString();
+
+  return (
+    <div className="min-h-screen bg-slate-900 text-white p-6 font-sans overflow-hidden flex flex-col justify-center">
+      {/* HEADER */}
+      <div className="flex justify-between items-center mb-8 px-2">
+        <div className="flex items-center gap-6">
+          <div className="bg-white/10 p-3 rounded-[2rem] border border-white/10 shadow-[0_0_40px_rgba(255,255,255,0.05)] backdrop-blur-md h-20 xl:h-24 flex items-center justify-center overflow-hidden">
+            <img src="/mvs-logo.png" alt="MVS Logo" className="h-full w-auto object-contain" />
+          </div>
+          <div>
+            <h1 className="text-5xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 mb-1">TECHLAB</h1>
+            <div className="text-indigo-400 font-bold uppercase tracking-[0.4em] text-md">Live Dashboard</div>
+          </div>
+        </div>
+        <div className="flex flex-col items-end">
+          <div className="text-xl text-slate-400 capitalize font-mono mb-1 tracking-wide">{formattedDate}</div>
+          <div className="text-7xl font-black font-mono tracking-tighter bg-clip-text text-transparent bg-gradient-to-br from-white to-slate-500 drop-shadow-[0_4px_20px_rgba(0,0,0,0.5)] leading-none">
+            {time.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}
+            <span className="text-4xl text-slate-500 ml-2 animate-pulse">: {time.getSeconds().toString().padStart(2, '0')}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col gap-6">
+        {/* ROW 1: 4 CARDS */}
+        <div className="grid grid-cols-4 gap-6 flex-1 min-h-0">
+          <LabCard title="Lavorazioni" value={stats.lavorate} icon={PlayCircle} colorClass="border-slate-500/50 text-slate-400" />
+          <LabCard title="In Corso" value={stats.inLavorazione} icon={Wrench} colorClass="border-indigo-500/50 text-indigo-400" />
+          <LabCard title="Staging" value={stats.staging} icon={LayoutGrid} colorClass="border-cyan-500/50 text-cyan-400" />
+          <LabCard title="Attesa Parte" value={stats.attesaPartiOggi} icon={Clock} colorClass="border-blue-500/50 text-blue-400" />
+        </div>
+
+        {/* ROW 2: 2 CARDS */}
+        <div className="grid grid-cols-2 gap-6 flex-[1.2] min-h-0">
+          <CompletatePerformanceCard completate={stats.completate} target={stats.target} scostamento={stats.scostamento} />
+          <RepairedTodayCard repairs={repairs} title="Pronti da evadere" />
         </div>
       </div>
     </div>
