@@ -5372,14 +5372,14 @@ const BacklogVsCompletedChart = ({ snapshots }) => {
 };
 
 const CategoryTrendChart = ({ snapshots, categories = [] }) => {
-  const [selectedCat, setSelectedCat] = useState("PC Portatili");
+  const [selectedCat, setSelectedCat] = useState("");
 
   useEffect(() => {
-    if (categories && categories.length > 0 && !categories.includes(selectedCat)) {
-      if (categories.includes("PC Portatili")) setSelectedCat("PC Portatili");
-      else setSelectedCat(categories[0]);
+    if (categories && categories.length > 0 && !selectedCat) {
+      const defaultCat = categories.find(c => c.toUpperCase() === "PC PORTATILI") || categories[0];
+      setSelectedCat(defaultCat);
     }
-  }, [categories]);
+  }, [categories, selectedCat]);
 
   if (!snapshots || snapshots.length === 0) {
     return (
@@ -5420,7 +5420,7 @@ const CategoryTrendChart = ({ snapshots, categories = [] }) => {
             <YAxis stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
             <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px', color: '#f8fafc' }} />
             <Legend iconType="circle" wrapperStyle={{ fontSize: '10px' }} />
-            <Line type="monotone" dataKey="Completate" stroke="#3b82f6" strokeWidth={3} dot={{ r: 3, fill: '#3b82f6', strokeWidth: 0 }} activeDot={{ r: 5 }} />
+            <Line type="monotone" dataKey="Completate" stroke="#10b981" strokeWidth={3} dot={{ r: 3, fill: '#10b981', strokeWidth: 0 }} activeDot={{ r: 5 }} />
             <Line type="step" dataKey="Target" stroke="#cbd5e1" strokeWidth={2} strokeDasharray="4 4" dot={false} activeDot={false} />
           </LineChart>
         </ResponsiveContainer>
@@ -5601,7 +5601,7 @@ function VideoWallLabView() {
         {/* ROW 1: 7 CARDS */}
         <div className="grid grid-cols-7 gap-6 flex-1 min-h-0">
           <LabCard title="Ingresso" value={stats.ingresso} icon={Package} colorClass="border-orange-500/50 text-orange-400" valueClass="text-6xl xl:text-7xl" />
-          <LabCard title="Lavorate (Oggi)" value={stats.lavorate} icon={PlayCircle} colorClass="border-slate-500/50 text-slate-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="Lavorate" value={stats.lavorate} icon={PlayCircle} colorClass="border-slate-500/50 text-slate-400" valueClass="text-6xl xl:text-7xl" />
           <LabCard title="In Lavorazione" value={stats.inLavorazione} icon={Wrench} colorClass="border-indigo-500/50 text-indigo-400" valueClass="text-6xl xl:text-7xl" />
           <LabCard title="Preinstallazione" value={stats.stagingTotal} icon={LayoutGrid} colorClass="border-cyan-500/50 text-cyan-400" valueClass="text-6xl xl:text-7xl" />
           <LabCard title="Attesa Parti" value={stats.attesaParti} icon={Clock} colorClass="border-blue-500/50 text-blue-400" valueClass="text-6xl xl:text-7xl" />
@@ -5686,12 +5686,13 @@ function VideoWall3View() {
       </div>
 
       <div className="flex-1 flex flex-col gap-6">
-        {/* ROW 1: 5 CARDS */}
-        <div className="grid grid-cols-5 gap-6 flex-1 min-h-0">
-          <LabCard title="Lavorazioni (Oggi)" value={stats.lavorate} icon={PlayCircle} colorClass="border-slate-500/50 text-slate-400" valueClass="text-6xl xl:text-7xl" />
+        {/* ROW 1: 6 CARDS */}
+        <div className="grid grid-cols-6 gap-6 flex-1 min-h-0">
+          <LabCard title="In Entrata" value={stats.ingressoOggi} icon={Package} colorClass="border-orange-500/50 text-orange-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="Lavorazioni" value={stats.lavorate} icon={PlayCircle} colorClass="border-slate-500/50 text-slate-400" valueClass="text-6xl xl:text-7xl" />
           <LabCard title="In Corso" value={stats.inLavorazione} icon={Wrench} colorClass="border-indigo-500/50 text-indigo-400" valueClass="text-6xl xl:text-7xl" />
-          <LabCard title="Staging (Oggi)" value={stats.stagingOggi} icon={LayoutGrid} colorClass="border-cyan-500/50 text-cyan-400" valueClass="text-6xl xl:text-7xl" />
-          <LabCard title="Attesa Parte (Oggi)" value={stats.attesaPartiOggi} icon={Clock} colorClass="border-blue-500/50 text-blue-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="Staging" value={stats.stagingOggi} icon={LayoutGrid} colorClass="border-cyan-500/50 text-cyan-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="Attesa Parte" value={stats.attesaPartiOggi} icon={Clock} colorClass="border-blue-500/50 text-blue-400" valueClass="text-6xl xl:text-7xl" />
           <LabCard title="Completate" value={stats.completateGlobale} icon={CheckCircle} colorClass="border-emerald-500/50 text-emerald-400" valueClass="text-6xl xl:text-7xl" />
         </div>
 
