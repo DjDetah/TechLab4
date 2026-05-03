@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight, X, Phone, Mail, MapPin,
   Camera, Save, Trash2, Clock, CheckCircle, AlertTriangle,
   Package, Truck, Wrench, Users, Activity, Settings, Link,
-  Download, ExternalLink, Filter, Calendar, MoreVertical, BrainCircuit, LayoutGrid, Minus, PlusCircle, PlayCircle, PauseCircle, Printer, Nfc, Zap, XCircle, AlertCircle, ArrowUp, ArrowDown, Edit2, Database, Upload, Award, RotateCcw, TrendingUp, TrendingDown
+  Download, ExternalLink, Filter, Calendar, MoreVertical, BrainCircuit, LayoutGrid, Minus, PlusCircle, PlayCircle, PauseCircle, Printer, Nfc, Zap, XCircle, AlertCircle, ArrowUp, ArrowDown, Edit2, Database, Upload, Award, RotateCcw, TrendingUp, TrendingDown, FileText
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList, AreaChart, Area, LineChart, Line, ReferenceLine
@@ -421,6 +421,27 @@ class RepairService {
     }
   }
 
+  async saveDailySnapshot(snapshotData) {
+    if (this.useFirebase) {
+      const docRef = doc(db, "daily_snapshots", `snapshot_${snapshotData.date}`);
+      await setDoc(docRef, snapshotData, { merge: true });
+    } else {
+      const saved = JSON.parse(localStorage.getItem('techlab_snapshots') || '{}');
+      saved[`snapshot_${snapshotData.date}`] = snapshotData;
+      localStorage.setItem('techlab_snapshots', JSON.stringify(saved));
+    }
+  }
+
+  async getDailySnapshots() {
+    if (this.useFirebase) {
+      const qSnap = await getDocs(query(collection(db, "daily_snapshots"), orderBy("date", "asc")));
+      return qSnap.docs.map(d => d.data());
+    } else {
+      const saved = JSON.parse(localStorage.getItem('techlab_snapshots') || '{}');
+      return Object.values(saved).sort((a, b) => a.date.localeCompare(b.date));
+    }
+  }
+
   // --- ADMIN TOOLS ---
   async resetRepairDatabase() {
     if (!this.useFirebase) {
@@ -733,10 +754,10 @@ function PrintLabel() {
   const [ticket, setTicket] = useState(null);
 
   useEffect(() => {
-    // Listen for custom event "prepare-print"
+    // Listen for custom event "prepare-print-label"
     const handler = (e) => setTicket(e.detail);
-    window.addEventListener('prepare-print', handler);
-    return () => window.removeEventListener('prepare-print', handler);
+    window.addEventListener('prepare-print-label', handler);
+    return () => window.removeEventListener('prepare-print-label', handler);
   }, []);
 
   // Also try to grab from URL or local storage if provided? 
@@ -762,9 +783,88 @@ function PrintLabel() {
     </div>
   );
 }
+
+function PrintVerbale() {
+  const [ticket, setTicket] = useState(null);
+
+  useEffect(() => {
+    const handler = (e) => setTicket(e.detail);
+    window.addEventListener('prepare-print-verbale', handler);
+    return () => window.removeEventListener('prepare-print-verbale', handler);
+  }, []);
+
+  if (!ticket) return null;
+
+  return (
+    <div id="print-verbale" className="hidden print:block fixed inset-0 bg-white z-[9999] p-10 text-black overflow-hidden font-sans">
+      {/* Header Verbale */}
+      <div className="flex justify-between items-center border-b-2 border-gray-800 pb-6 mb-8">
+        <div>
+          <h1 className="text-3xl font-black uppercase tracking-widest text-gray-900">Verbale Intervento</h1>
+          <p className="text-gray-500 font-bold mt-1">TechLab Tracker</p>
+        </div>
+        <div className="text-right">
+          <p className="text-sm font-bold">Data Stampa: {new Date().toLocaleDateString('it-IT')}</p>
+          <p className="text-sm">Rif. Pratica: <span className="font-bold">{ticket.id}</span></p>
+          <p className="text-sm">Tag: <span className="font-bold text-indigo-600">{ticket.tag || '-'}</span></p>
+        </div>
+      </div>
+
+      {/* Dettagli Apparato */}
+      <div className="mb-8 border border-gray-300 rounded-lg p-6 bg-gray-50">
+        <h2 className="text-lg font-bold uppercase mb-4 text-gray-800 border-b pb-2">Dettagli Apparato</h2>
+        <div className="grid grid-cols-2 gap-4">
+          <div><span className="text-gray-500 text-sm">Categoria:</span> <p className="font-bold">{ticket.category || '-'}</p></div>
+          <div><span className="text-gray-500 text-sm">Modello:</span> <p className="font-bold">{ticket.model || '-'}</p></div>
+          <div><span className="text-gray-500 text-sm">Seriale (SN):</span> <p className="font-bold">{ticket.serial || '-'}</p></div>
+          <div><span className="text-gray-500 text-sm">Alimentatore:</span> <p className="font-bold">{ticket.hasPowerSupply ? 'Ritirato' : 'Non ritirato'}</p></div>
+        </div>
+      </div>
+
+      {/* Difetto e Diagnosi */}
+      <div className="mb-8">
+        <h2 className="text-lg font-bold uppercase mb-4 text-gray-800 border-b pb-2">Segnalazione e Diagnosi</h2>
+        <div className="mb-4">
+          <span className="text-gray-500 text-sm block mb-1">Guasto Dichiarato:</span>
+          <div className="p-4 bg-gray-50 border border-gray-200 rounded min-h-[60px]">{ticket.faultDeclared || '-'}</div>
+        </div>
+        <div>
+          <span className="text-gray-500 text-sm block mb-1">Note Tecnico / Diagnosi:</span>
+          <div className="p-4 bg-gray-50 border border-gray-200 rounded min-h-[100px] whitespace-pre-wrap">{ticket.techNotes || '-'}</div>
+        </div>
+      </div>
+
+      {/* Intervento e Ricambi */}
+      <div className="mb-8">
+        <h2 className="text-lg font-bold uppercase mb-4 text-gray-800 border-b pb-2">Dettagli Intervento</h2>
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <div><span className="text-gray-500 text-sm">Stato Attuale:</span> <p className="font-bold">{ticket.status}</p></div>
+          <div><span className="text-gray-500 text-sm">Assegnato A:</span> <p className="font-bold">{ticket.assignedTo || '-'}</p></div>
+        </div>
+        <div>
+          <span className="text-gray-500 text-sm block mb-1">Ricambi Utilizzati:</span>
+          <div className="p-4 bg-gray-50 border border-gray-200 rounded min-h-[60px]">
+            {ticket.replacedParts && ticket.replacedParts.length > 0 ? ticket.replacedParts.join(', ') : 'Nessun ricambio inserito'}
+          </div>
+        </div>
+      </div>
+
+      {/* Firme */}
+      <div className="mt-16 pt-16 border-t border-gray-300 grid grid-cols-2 gap-16">
+        <div className="text-center">
+          <p className="border-t border-black pt-2 font-bold text-sm">Firma Tecnico</p>
+        </div>
+        <div className="text-center">
+          <p className="border-t border-black pt-2 font-bold text-sm">Firma per Ricevuta / Cliente</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Note: Dispatch event before window.print()
 // We need to update the onClick handlers above to:
-// onClick={() => { window.dispatchEvent(new CustomEvent('prepare-print', { detail: repair })); setTimeout(window.print, 100); }}
+// onClick={() => { window.dispatchEvent(new CustomEvent('prepare-print-label', { detail: repair })); setTimeout(window.print, 100); }}
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -939,7 +1039,7 @@ function Sidebar({ masterData }) {
         onClick={() => setSidebarOpen(false)}
       />
 
-      <aside className={`fixed md:static inset-y-0 left-0 bg-white dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700 flex flex-col z-30 transition-all duration-300 transform
+      <aside className={`fixed md:static inset-y-0 left-0 bg-white dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700 flex flex-col z-30 transition-all duration-300 transform print:hidden
         ${sidebarOpen ? 'translate-x-0 w-64' : '-translate-x-full w-0 md:translate-x-0'}
         ${collapsed ? 'md:w-20' : 'md:w-64'}
       `}>
@@ -1037,7 +1137,7 @@ function Header({ setDarkMode, darkMode }) {
   const { sidebarOpen, setSidebarOpen } = useContext(NavigationContext);
 
   return (
-    <header className="h-16 border-b border-gray-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm flex items-center justify-between px-6 sticky top-0 z-10 w-full">
+    <header className="h-16 border-b border-gray-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm flex items-center justify-between px-6 sticky top-0 z-10 w-full print:hidden">
       <div className="flex items-center gap-4">
         <button
           onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -1257,6 +1357,80 @@ function SettingsView({ slaConfig, onUpdate, assignRules, onUpdateRules, masterD
     setTimeout(() => setSaved(false), 2000);
   };
 
+  const handleSaveSnapshot = async () => {
+    if (!window.confirm("Sei sicuro di voler salvare lo snapshot odierno? Sovrascriverà l'eventuale salvataggio di oggi.")) return;
+    try {
+      const data = await service.getRepairs();
+      const settings = await service.getSettings();
+      // calculateDailyMetrics is exported at the bottom, but we can call it if it's hoisted or we can just fetch it. 
+      // Actually, since calculateDailyMetrics is defined later as a const, it might not be hoisted. 
+      // Let's ensure it works. It's inside a click handler, so it should be fine.
+      const metrics = calculateDailyMetrics(data || [], settings.categoryTargets || {});
+      const dateStr = new Date().toISOString().split('T')[0];
+      const snapshot = {
+        date: dateStr,
+        timestamp: Date.now(),
+        metrics: {
+          ingresso: metrics.ingresso,
+          ingressoOggi: metrics.ingressoOggi,
+          inLavorazione: metrics.inLavorazione,
+          attesaParti: metrics.attesaParti,
+          attesaPartiOggi: metrics.attesaPartiOggi,
+          stagingTotal: metrics.stagingTotal,
+          stagingOggi: metrics.stagingOggi,
+          lavorate: metrics.lavorate,
+          completateGlobale: metrics.completateGlobale,
+          backlogGlobale: metrics.backlogGlobale
+        },
+        categoryPerformances: metrics.categoryPerformances
+      };
+      await service.saveDailySnapshot(snapshot);
+      alert("Snapshot salvato correttamente!");
+    } catch (err) {
+      console.error(err);
+      alert("Errore nel salvataggio dello snapshot.");
+    }
+  };
+
+  const handleExportSnapshotsCSV = async () => {
+    try {
+      const snapshots = await service.getDailySnapshots();
+      if (!snapshots || snapshots.length === 0) {
+        alert("Nessun dato storico trovato.");
+        return;
+      }
+      
+      const headers = ["Data", "Ingresso", "In Lavorazione", "Attesa Parti", "Staging", "Lavorate", "Completate Globale", "Backlog Globale"];
+      const rows = snapshots.map(s => [
+        s.date,
+        s.metrics.ingresso,
+        s.metrics.inLavorazione,
+        s.metrics.attesaParti,
+        s.metrics.stagingTotal,
+        s.metrics.lavorate,
+        s.metrics.completateGlobale,
+        s.metrics.backlogGlobale
+      ]);
+      
+      const csvContent = [
+        headers.join(";"),
+        ...rows.map(row => row.join(";"))
+      ].join("\n");
+      
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `snapshots_${new Date().toISOString().split('T')[0]}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error(err);
+      alert("Errore nell'estrazione dei dati CSV.");
+    }
+  };
+
   return (
     <div className="max-w-4xl mx-auto bg-white dark:bg-slate-800 rounded-xl shadow p-8">
       <h2 className="text-2xl font-bold mb-6 flex items-center gap-3">
@@ -1268,18 +1442,48 @@ function SettingsView({ slaConfig, onUpdate, assignRules, onUpdateRules, masterD
         {/* SECTION 0: TARGET LABORATORIO (Manager Only) */}
         {profile?.role === 'manager' && (
           <div className="space-y-4 mb-8">
-            <h3 className="text-lg font-bold flex items-center gap-2"><Activity className="text-indigo-400" /> Target Riparazioni</h3>
-            <div className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 p-4 rounded-xl flex items-center gap-4">
-              <div className="flex-1">
-                <p className="font-bold text-gray-800 dark:text-gray-200">Target Giornaliero Completate</p>
-                <p className="text-xs text-gray-500">Valore numerico usato nel VideoWall Laboratorio per calcolare lo scostamento.</p>
+            <h3 className="text-lg font-bold flex items-center gap-2"><Activity className="text-indigo-400" /> Target Riparazioni per Categoria</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {localMaster.categories?.map(cat => (
+                <div key={cat} className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 p-4 rounded-xl flex items-center justify-between gap-4">
+                  <div className="flex-1">
+                    <p className="font-bold text-gray-800 dark:text-gray-200 truncate">{cat}</p>
+                    <p className="text-[10px] text-gray-500">Target Giornaliero (0 = Escluso)</p>
+                  </div>
+                  <input
+                    type="number"
+                    className="input w-24 text-center text-lg font-bold py-2 shrink-0"
+                    value={localMaster.categoryTargets?.[cat] || 0}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value) || 0;
+                      handleMasterDataUpdate('categoryTargets', {
+                        ...(localMaster.categoryTargets || {}),
+                        [cat]: val
+                      });
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* SECTION 0.5: SNAPSHOT QUOTIDIANO */}
+        {profile?.role === 'manager' && (
+          <div className="space-y-4 mb-8 border-t pt-8 dark:border-slate-700">
+            <h3 className="text-lg font-bold flex items-center gap-2"><Database className="text-emerald-400" /> Storico e Snapshot</h3>
+            <div className="bg-emerald-50 dark:bg-emerald-900/20 p-4 rounded-lg border border-emerald-100 dark:border-emerald-800 flex justify-between items-center gap-4">
+              <p className="text-sm text-emerald-800 dark:text-emerald-300 flex-1">
+                Salva i KPI attuali come dati di oggi. Un solo snapshot viene conservato al giorno (l'ultimo effettuato sovrascrive i precedenti).
+              </p>
+              <div className="flex gap-2">
+                <button onClick={handleExportSnapshotsCSV} className="btn bg-white border-emerald-200 text-emerald-700 hover:bg-emerald-50 shadow-sm flex gap-2">
+                  <Download size={18} /> CSV Storico
+                </button>
+                <button onClick={handleSaveSnapshot} className="btn bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg flex gap-2">
+                  <CheckCircle size={18} /> Salva Snapshot Odierno
+                </button>
               </div>
-              <input
-                type="number"
-                className="input w-32 text-center text-lg font-bold py-2"
-                value={localMaster.targetGiornaliero || 0}
-                onChange={(e) => handleMasterDataUpdate('targetGiornaliero', parseInt(e.target.value) || 0)}
-              />
             </div>
           </div>
         )}
@@ -1996,10 +2200,14 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
           )}
           {/* V4.2 Print Label Button */}
           {masterData?.enableLabels && (
-            <button onClick={() => { window.dispatchEvent(new CustomEvent('prepare-print', { detail: repair })); setTimeout(() => window.print(), 100); }} className="flex justify-center items-center gap-2 px-3 py-2 bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-600 rounded-lg shadow-sm hover:bg-slate-200 text-sm font-medium" title="Stampa Etichetta">
+            <button onClick={() => { window.dispatchEvent(new CustomEvent('prepare-print-label', { detail: repair })); window.dispatchEvent(new CustomEvent('prepare-print-verbale', { detail: null })); setTimeout(() => window.print(), 100); }} className="flex justify-center items-center gap-2 px-3 py-2 bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-600 rounded-lg shadow-sm hover:bg-slate-200 text-sm font-medium" title="Stampa Etichetta">
               <Printer size={20} />
             </button>
           )}
+          {/* V5.6 Stampa Verbale Button */}
+          <button onClick={() => { window.dispatchEvent(new CustomEvent('prepare-print-verbale', { detail: repair })); window.dispatchEvent(new CustomEvent('prepare-print-label', { detail: null })); setTimeout(() => window.print(), 100); }} className="flex justify-center items-center gap-2 px-3 py-2 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-200 dark:border-blue-800 rounded-lg shadow-sm hover:bg-blue-200 text-sm font-medium" title="Stampa Verbale">
+            <FileText size={20} /> <span className="hidden md:inline">Verbale</span>
+          </button>
           <button onClick={() => fileInputRef.current?.click()} className="flex justify-center items-center gap-2 px-3 py-2 bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-lg shadow-sm hover:bg-gray-50 text-sm font-medium" title="Salva Foto">
             <Camera size={20} />
           </button>
@@ -2669,7 +2877,7 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
     processing: repairs.filter(r => r.status === 'In Lavorazione').length,
     parts: repairs.filter(r => r.status === 'Attesa Parti').length,
     completed: repairs.filter(r => r.status === 'Riparato').length,
-    shipped: repairs.filter(r => r.status === 'Spedito').length,
+    staging: repairs.filter(r => r.status === 'Staging').length,
 
     urgent: repairs.filter(r => r.priorityClaim).length,
     today: repairs.filter(r => r.dateOut && new Date(r.dateOut).toDateString() === new Date().toDateString()).length,
@@ -2741,7 +2949,7 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
     const headers = [
       'ID Lavorazione', 'Tag', 'Categoria', 'Modello', 'Seriale',
       'Stato', 'Data Ingresso', 'Data Inizio Lavorazione',
-      'Data Attesa Parti', 'Data Ripresa Lavorazione',
+      'Data Inizio Staging', 'Data Attesa Parti', 'Data Ripresa Lavorazione',
       'Data Rientro RMA', 'Data Chiusura', 'Guasto Dichiarato',
       'Rientro da Staging', 'Diagnosi / Note Tecnico', 'Ricambi Utilizzati',
       'Assegnato A', 'Urgente', 'Alimentatore', 'Dettagli RMA (Ticket/Data/Note)',
@@ -2754,29 +2962,33 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
       return `"${str}"`;
     };
 
-    const rows = sortedRepairs.map(r => [
-      r.id,
-      r.tag,
-      r.category || 'Altro',
-      r.model,
-      r.serial,
-      r.status,
-      formatDateTime(r.dateIn, true),
-      r.dateStart ? formatDateTime(r.dateStart, true) : '',
-      r.datePartsMissing ? formatDateTime(r.datePartsMissing, true) : '',
-      r.dateResume ? formatDateTime(r.dateResume, true) : '',
-      r.dateRmaReturn ? formatDateTime(r.dateRmaReturn, true) : '',
-      r.dateOut ? formatDateTime(r.dateOut, true) : '',
-      r.faultDeclared,
-      r.stagingReturn ? 'SI' : 'NO',
-      r.techNotes || '',
-      r.replacedParts ? r.replacedParts.join(', ') : '',
-      r.assignedTo || '',
-      r.priorityClaim ? 'SI' : 'NO',
-      r.hasPowerSupply ? 'SI' : 'NO',
-      r.rmaInfo ? `Ticket: ${r.rmaInfo.ticket || '-'} | Data Invio: ${r.rmaInfo.dateSent ? formatDateTime(r.rmaInfo.dateSent, false) : '-'} | Note: ${r.rmaInfo.notes || '-'}` : '',
-      r.timeline && r.timeline.length > 0 ? r.timeline.map(t => `${t.status} (${formatDateTime(t.date, true)})`).join(' -> ') : ''
-    ].map(escape).join(';'));
+    const rows = sortedRepairs.map(r => {
+      const stagingEvent = r.timeline?.find(t => t.status === 'Staging');
+      return [
+        r.id,
+        r.tag,
+        r.category || 'Altro',
+        r.model,
+        r.serial,
+        r.status,
+        formatDateTime(r.dateIn, true),
+        r.dateStart ? formatDateTime(r.dateStart, true) : '',
+        stagingEvent ? formatDateTime(stagingEvent.date, true) : '',
+        r.datePartsMissing ? formatDateTime(r.datePartsMissing, true) : '',
+        r.dateResume ? formatDateTime(r.dateResume, true) : '',
+        r.dateRmaReturn ? formatDateTime(r.dateRmaReturn, true) : '',
+        r.dateOut ? formatDateTime(r.dateOut, true) : '',
+        r.faultDeclared,
+        r.stagingReturn ? 'SI' : 'NO',
+        r.techNotes || '',
+        r.replacedParts ? r.replacedParts.join(', ') : '',
+        r.assignedTo || '',
+        r.priorityClaim ? 'SI' : 'NO',
+        r.hasPowerSupply ? 'SI' : 'NO',
+        r.rmaInfo ? `Ticket: ${r.rmaInfo.ticket || '-'} | Data Invio: ${r.rmaInfo.dateSent ? formatDateTime(r.rmaInfo.dateSent, false) : '-'} | Note: ${r.rmaInfo.notes || '-'}` : '',
+        r.timeline && r.timeline.length > 0 ? r.timeline.map(t => `${t.status} (${formatDateTime(t.date, true)})`).join(' -> ') : ''
+      ].map(escape).join(';');
+    });
 
     const csvContent = "data:text/csv;charset=utf-8,\uFEFF"
       + headers.join(';') + "\n"
@@ -2871,12 +3083,12 @@ function OperatorTable({ onAdd, onSelect, slaConfig }) {
         </div>
         <div className="flex-1 min-w-[100px] max-w-[200px]">
           <StatusCard
-            label="Spediti"
-            count={stats.shipped}
-            variant="gray"
-            icon={Truck}
-            isActive={statusFilter === 'Spedito'}
-            onClick={() => setStatusFilter(statusFilter === 'Spedito' ? null : 'Spedito')}
+            label="Staging"
+            count={stats.staging}
+            variant="cyan"
+            icon={LayoutGrid}
+            isActive={statusFilter === 'Staging'}
+            onClick={() => setStatusFilter(statusFilter === 'Staging' ? null : 'Staging')}
           />
         </div>
         <div className="flex-1 min-w-[100px] max-w-[200px]">
@@ -5039,63 +5251,179 @@ const LabCard = ({ title, value, icon: Icon, colorClass, valueClass = "text-8xl"
   </div>
 );
 
-const CompletatePerformanceCard = ({ completate, target, scostamento, className = "", valueClass = "text-[12rem]" }) => {
-  const isPositive = scostamento > 0;
-  const isNegative = scostamento < 0;
 
-  let Icon = Activity;
-  let scostamentoColor = "text-blue-400";
-  let scostamentoBg = "bg-blue-900/10 border-blue-500/30";
-  
-  if (isPositive) {
-    scostamentoColor = "text-emerald-400";
-    scostamentoBg = "bg-emerald-900/20 border-emerald-500/50 shadow-[0_0_30px_rgba(16,185,129,0.15)]";
-    Icon = TrendingUp;
-  } else if (isNegative) {
-    scostamentoColor = "text-orange-400";
-    scostamentoBg = "bg-orange-900/20 border-orange-500/50 shadow-[0_0_30px_rgba(249,115,22,0.15)]";
-    Icon = TrendingDown;
-  }
+
+const CategoryGridPerformanceCard = ({ categoryPerformances, className = "" }) => {
+  // Sort descending by target
+  const sortedPerformances = [...(categoryPerformances || [])].sort((a, b) => b.target - a.target);
 
   return (
-    <div className={`bg-slate-800 rounded-2xl p-6 border border-emerald-500/50 shadow-[0_0_50px_rgba(16,185,129,0.1)] flex flex-col justify-between h-full relative overflow-hidden ${className}`}>
-      <div className="flex justify-between items-start relative z-10 mb-4">
-        <h3 className="text-3xl font-bold uppercase tracking-wider text-emerald-400">Completate</h3>
-        <div className="p-3 rounded-full bg-emerald-900/50 backdrop-blur-sm">
-          <CheckCircle size={32} className="text-emerald-400" />
-        </div>
+    <div className={`bg-slate-800 rounded-2xl p-6 border border-emerald-500/50 shadow-[0_0_50px_rgba(16,185,129,0.1)] flex flex-col h-full relative overflow-hidden ${className}`}>
+      <div className="flex justify-between items-start relative z-10 mb-4 border-b border-slate-700 pb-2">
+        <h3 className="text-xl font-bold uppercase tracking-wider text-emerald-400">Performance Categorie</h3>
+        <Activity size={24} className="text-emerald-400" />
       </div>
       
-      <div className="flex-1 flex items-end relative z-10 gap-8">
-        {/* Main Completate Total */}
-        <div className="flex-1 flex items-end">
-          <span className={`${valueClass} font-black leading-none drop-shadow-md text-emerald-400 tracking-tighter`}>{completate}</span>
+      {!sortedPerformances || sortedPerformances.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center relative z-10">
+          <p className="text-slate-500 italic">Nessun target configurato</p>
         </div>
+      ) : (
+        <div className="flex flex-col gap-4 flex-1 content-start overflow-y-auto pr-2 custom-scrollbar relative z-10">
+          {sortedPerformances.map(perf => {
+            const isPositive = perf.scostamento > 0;
+            const isNegative = perf.scostamento < 0;
+            let color = "text-blue-400";
+            let bg = "bg-blue-900/10 border-blue-500/30 w-full";
+            let icon = <Activity size={24} className={color} />;
+            
+            if (isPositive) {
+              color = "text-emerald-400";
+              bg = "bg-emerald-900/20 border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.15)] w-full";
+              icon = <TrendingUp size={24} className={color} />;
+            } else if (isNegative) {
+              color = "text-orange-400";
+              bg = "bg-orange-900/20 border-orange-500/50 shadow-[0_0_15px_rgba(249,115,22,0.15)] w-full";
+              icon = <TrendingDown size={24} className={color} />;
+            }
 
-        {/* Sub-section: Target & Scostamento */}
-        <div className={`w-[280px] rounded-2xl p-5 border flex flex-col justify-between transition-colors duration-1000 ${scostamentoBg}`}>
-           <div className="flex justify-between items-center mb-4">
-             <span className="text-xs font-bold uppercase tracking-widest text-slate-300">Performance</span>
-             <Icon size={24} className={scostamentoColor} />
-           </div>
-           <div className="flex flex-col gap-4">
-             <div className="flex flex-col border-b border-white/10 pb-3">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Target Giornaliero</span>
-                <span className="text-5xl font-black leading-none text-slate-200">{target}</span>
-             </div>
-             <div className="flex flex-col pt-1">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Scostamento</span>
-                <span className={`text-6xl font-black leading-none drop-shadow-lg ${scostamentoColor}`}>
-                  {scostamento > 0 ? `+${scostamento}` : scostamento}
-                </span>
-             </div>
-           </div>
+            return (
+              <div key={perf.category} className={`rounded-xl p-5 border flex flex-col justify-between ${bg} gap-3 shrink-0`}>
+                 <div className="flex justify-between items-center">
+                   <span className="text-lg font-black uppercase tracking-widest text-slate-200">{perf.category}</span>
+                   {icon}
+                 </div>
+                 <div className="flex justify-between items-end pt-3 border-t border-white/5">
+                    <div className="flex flex-col items-center flex-1">
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Completate</span>
+                      <span className="text-4xl font-black text-slate-100">{perf.completate}</span>
+                    </div>
+                    <div className="flex flex-col items-center flex-1 border-l border-white/5">
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Target</span>
+                      <span className="text-4xl font-black text-slate-500">{perf.target}</span>
+                    </div>
+                    <div className="flex flex-col items-center flex-1 border-l border-white/5">
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Scostamento</span>
+                      <span className={`text-4xl font-black drop-shadow-lg ${color}`}>
+                        {perf.scostamento > 0 ? `+${perf.scostamento}` : perf.scostamento}
+                      </span>
+                    </div>
+                 </div>
+              </div>
+            );
+          })}
         </div>
-      </div>
+      )}
 
-      {/* Subtle background glow */}
       <div className="absolute -bottom-20 -left-10 opacity-[0.03] pointer-events-none text-emerald-500">
         <CheckCircle size={400} />
+      </div>
+    </div>
+  );
+};
+
+const BacklogVsCompletedChart = ({ snapshots }) => {
+  if (!snapshots || snapshots.length === 0) {
+    return (
+      <div className="bg-slate-800 rounded-2xl p-4 border border-slate-700 flex flex-col h-full items-center justify-center">
+        <Database size={32} className="text-slate-600 mb-2" />
+        <p className="text-slate-500 uppercase tracking-widest text-xs font-bold">Nessun dato storico</p>
+      </div>
+    );
+  }
+  
+  const data = snapshots.map(s => {
+    const dateLabel = s.date.split('-').slice(1).join('/');
+    return {
+      name: dateLabel,
+      Backlog: s.metrics.backlogGlobale || 0,
+      Completate: s.metrics.completateGlobale || 0
+    };
+  });
+
+  return (
+    <div className="bg-slate-800 rounded-2xl p-4 border border-slate-700 flex flex-col h-full w-full relative overflow-hidden">
+      <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2 border-b border-slate-700 pb-1">Trend Globale (Backlog vs Completate)</h3>
+      <div className="flex-1 min-h-0 pt-2">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
+            <defs>
+              <linearGradient id="colorBacklog" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#a855f7" stopOpacity={0.4}/>
+                <stop offset="95%" stopColor="#a855f7" stopOpacity={0}/>
+              </linearGradient>
+              <linearGradient id="colorCompletate" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#10b981" stopOpacity={0.4}/>
+                <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+            <XAxis dataKey="name" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+            <YAxis stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+            <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px', color: '#f8fafc' }} />
+            <Legend iconType="circle" wrapperStyle={{ fontSize: '10px' }} />
+            <Area type="monotone" dataKey="Backlog" stroke="#a855f7" strokeWidth={3} fillOpacity={1} fill="url(#colorBacklog)" />
+            <Area type="monotone" dataKey="Completate" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#colorCompletate)" />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+};
+
+const CategoryTrendChart = ({ snapshots, categories = [] }) => {
+  const [selectedCat, setSelectedCat] = useState("PC Portatili");
+
+  useEffect(() => {
+    if (categories && categories.length > 0 && !categories.includes(selectedCat)) {
+      if (categories.includes("PC Portatili")) setSelectedCat("PC Portatili");
+      else setSelectedCat(categories[0]);
+    }
+  }, [categories]);
+
+  if (!snapshots || snapshots.length === 0) {
+    return (
+      <div className="bg-slate-800 rounded-2xl p-4 border border-slate-700 flex flex-col h-full items-center justify-center">
+        <Activity size={32} className="text-slate-600 mb-2" />
+        <p className="text-slate-500 uppercase tracking-widest text-xs font-bold">Nessun dato storico</p>
+      </div>
+    );
+  }
+
+  const data = snapshots.map(s => {
+    const dateLabel = s.date.split('-').slice(1).join('/');
+    const catPerf = s.categoryPerformances?.find(c => c.category === selectedCat);
+    return {
+      name: dateLabel,
+      Completate: catPerf ? catPerf.completate : 0,
+      Target: catPerf ? catPerf.target : 0
+    };
+  });
+
+  return (
+    <div className="bg-slate-800 rounded-2xl p-4 border border-slate-700 flex flex-col h-full w-full relative overflow-hidden">
+      <div className="flex justify-between items-center mb-2 border-b border-slate-700 pb-1">
+        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">Trend Performance Categoria</h3>
+        <select 
+          className="bg-slate-900 border border-slate-600 text-slate-300 rounded px-2 py-0.5 text-xs outline-none"
+          value={selectedCat}
+          onChange={(e) => setSelectedCat(e.target.value)}
+        >
+          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <div className="flex-1 min-h-0 pt-2">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+            <XAxis dataKey="name" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+            <YAxis stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+            <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px', color: '#f8fafc' }} />
+            <Legend iconType="circle" wrapperStyle={{ fontSize: '10px' }} />
+            <Line type="monotone" dataKey="Completate" stroke="#3b82f6" strokeWidth={3} dot={{ r: 3, fill: '#3b82f6', strokeWidth: 0 }} activeDot={{ r: 5 }} />
+            <Line type="step" dataKey="Target" stroke="#cbd5e1" strokeWidth={2} strokeDasharray="4 4" dot={false} activeDot={false} />
+          </LineChart>
+        </ResponsiveContainer>
       </div>
     </div>
   );
@@ -5153,23 +5481,80 @@ const RepairedTodayCard = ({ repairs, className="", title="Riparati Oggi" }) => 
   );
 };
 
+export const calculateDailyMetrics = (repairs, categoryTargets = {}) => {
+  const todayStr = new Date().toDateString();
+  
+  // Base metrics
+  const ingresso = repairs.filter(r => r.status === 'Ingresso').length;
+  const ingressoOggi = repairs.filter(r => r.dateIn && new Date(r.dateIn).toDateString() === todayStr).length;
+  const inLavorazione = repairs.filter(r => r.status === 'In Lavorazione').length;
+  const attesaParti = repairs.filter(r => r.status === 'Attesa Parti').length;
+  const attesaPartiOggi = repairs.filter(r => r.status === 'Attesa Parti' && r.datePartsMissing && new Date(r.datePartsMissing).toDateString() === todayStr).length;
+  
+  const stagingTotal = repairs.filter(r => r.status === 'Staging').length;
+  const stagingOggi = repairs.filter(r => {
+    if (r.status !== 'Staging') return false;
+    const stagingEvent = r.timeline?.find(t => t.status === 'Staging');
+    return stagingEvent && new Date(stagingEvent.date).toDateString() === todayStr;
+  }).length;
+  
+  const lavorate = repairs.filter(r => r.dateStart && new Date(r.dateStart).toDateString() === todayStr).length;
+  
+  const completateList = repairs.filter(r => (r.status === 'Riparato' || r.status === 'Spedito') && r.dateOut && new Date(r.dateOut).toDateString() === todayStr);
+  const completateGlobale = completateList.length;
+
+  const categoryPerformances = [];
+  Object.entries(categoryTargets).forEach(([cat, target]) => {
+    if (target > 0) {
+      const completateCat = completateList.filter(r => r.category === cat).length;
+      categoryPerformances.push({
+        category: cat,
+        completate: completateCat,
+        target,
+        scostamento: completateCat - target
+      });
+    }
+  });
+
+  const backlogGlobale = ingresso + inLavorazione + attesaParti + stagingTotal;
+
+  return {
+    ingresso,
+    ingressoOggi,
+    inLavorazione,
+    attesaParti,
+    attesaPartiOggi,
+    stagingTotal,
+    stagingOggi,
+    lavorate,
+    completateGlobale,
+    categoryPerformances,
+    backlogGlobale
+  };
+};
+
 // --- FEATURES: VIDEOWALL LAB (V5.5) ---
 function VideoWallLabView() {
   const [repairs, setRepairs] = useState([]);
-  const [targetGiornaliero, setTargetGiornaliero] = useState(0);
+  const [categoryTargets, setCategoryTargets] = useState({});
+  const [categories, setCategories] = useState([]);
+  const [snapshots, setSnapshots] = useState([]);
   const [time, setTime] = useState(new Date());
 
   useEffect(() => {
     let active = true;
     const fetchData = async () => {
       try {
-        const [data, settings] = await Promise.all([
+        const [data, settings, snapData] = await Promise.all([
           service.getRepairs(),
-          service.getSettings()
+          service.getSettings(),
+          service.getDailySnapshots()
         ]);
         if (active) {
           setRepairs(data || []);
-          setTargetGiornaliero(settings.targetGiornaliero || 0);
+          setCategoryTargets(settings.categoryTargets || {});
+          setCategories(settings.categories || []);
+          setSnapshots(snapData || []);
         }
       } catch (e) {
         console.error("VideoWallLab Failed to fetch data:", e);
@@ -5185,36 +5570,7 @@ function VideoWallLabView() {
     return () => clearInterval(timer);
   }, []);
 
-  const stats = useMemo(() => {
-    const todayStr = new Date().toDateString();
-    
-    // 1. In Attesa Diagnosi
-    const ingresso = repairs.filter(r => r.status === 'Ingresso').length;
-    // 2. Lavorate (Data inizio lavorazione odierna)
-    const lavorate = repairs.filter(r => r.dateStart && new Date(r.dateStart).toDateString() === todayStr).length;
-    // 3. In lavorazione
-    const inLavorazione = repairs.filter(r => r.status === 'In Lavorazione').length;
-    // 4. Attesa Parti
-    const attesaParti = repairs.filter(r => r.status === 'Attesa Parti').length;
-    // 5. Preinstallazione e Test
-    const staging = repairs.filter(r => r.status === 'Staging').length;
-    // 6. Completate (Data Chiusura odierna)
-    const completate = repairs.filter(r => (r.status === 'Riparato' || r.status === 'Spedito') && r.dateOut && new Date(r.dateOut).toDateString() === todayStr).length;
-    // 9. Backlog
-    const backlog = ingresso + inLavorazione + attesaParti + staging;
-
-    return {
-      ingresso,
-      lavorate,
-      inLavorazione,
-      attesaParti,
-      staging,
-      completate,
-      target: targetGiornaliero,
-      scostamento: completate - targetGiornaliero,
-      backlog
-    };
-  }, [repairs, targetGiornaliero]);
+  const stats = useMemo(() => calculateDailyMetrics(repairs, categoryTargets), [repairs, categoryTargets]);
 
   const formattedDate = time.toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
   const timeString = time.toLocaleTimeString();
@@ -5242,19 +5598,28 @@ function VideoWallLabView() {
       </div>
 
       <div className="flex-1 flex flex-col gap-6">
-        {/* ROW 1: 5 CARDS */}
-        <div className="grid grid-cols-5 gap-6 flex-1 min-h-0">
-          <LabCard title="In Attesa Diagnosi" value={stats.ingresso} icon={Package} colorClass="border-orange-500/50 text-orange-400" />
-          <LabCard title="In Lavorazione" value={stats.inLavorazione} icon={Wrench} colorClass="border-indigo-500/50 text-indigo-400" />
-          <LabCard title="Attesa Parti" value={stats.attesaParti} icon={Clock} colorClass="border-blue-500/50 text-blue-400" />
-          <LabCard title="Preinstallazione" value={stats.staging} icon={LayoutGrid} colorClass="border-cyan-500/50 text-cyan-400" />
-          <LabCard title="Lavorate (Oggi)" value={stats.lavorate} icon={PlayCircle} colorClass="border-slate-500/50 text-slate-400" />
+        {/* ROW 1: 7 CARDS */}
+        <div className="grid grid-cols-7 gap-6 flex-1 min-h-0">
+          <LabCard title="Ingresso" value={stats.ingresso} icon={Package} colorClass="border-orange-500/50 text-orange-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="Lavorate (Oggi)" value={stats.lavorate} icon={PlayCircle} colorClass="border-slate-500/50 text-slate-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="In Lavorazione" value={stats.inLavorazione} icon={Wrench} colorClass="border-indigo-500/50 text-indigo-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="Preinstallazione" value={stats.stagingTotal} icon={LayoutGrid} colorClass="border-cyan-500/50 text-cyan-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="Attesa Parti" value={stats.attesaParti} icon={Clock} colorClass="border-blue-500/50 text-blue-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="Completate" value={stats.completateGlobale} icon={CheckCircle} colorClass="border-emerald-500/50 text-emerald-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="Backlog Lab" value={stats.backlogGlobale} icon={Database} colorClass="border-purple-500/50 text-purple-400" valueClass="text-6xl xl:text-7xl" />
         </div>
 
-        {/* ROW 2: 2 CARDS (grid-cols-2) */}
+        {/* ROW 2: 50/50 SPLIT */}
         <div className="grid grid-cols-2 gap-6 flex-[1.2] min-h-0">
-          <CompletatePerformanceCard completate={stats.completate} target={stats.target} scostamento={stats.scostamento} />
-          <LabCard title="Backlog Lab" value={stats.backlog} icon={Database} colorClass="border-purple-500/50 text-purple-400" valueClass="text-[12rem]" titleClass="text-3xl text-purple-400" />
+          <CategoryGridPerformanceCard categoryPerformances={stats.categoryPerformances} />
+          <div className="flex flex-col gap-6 h-full min-h-0">
+            <div className="flex-1 min-h-0">
+              <BacklogVsCompletedChart snapshots={snapshots} />
+            </div>
+            <div className="flex-1 min-h-0">
+              <CategoryTrendChart snapshots={snapshots} categories={categories} />
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -5264,7 +5629,7 @@ function VideoWallLabView() {
 // --- FEATURES: VIDEOWALL LAB 3 (V5.6) ---
 function VideoWall3View() {
   const [repairs, setRepairs] = useState([]);
-  const [targetGiornaliero, setTargetGiornaliero] = useState(0);
+  const [categoryTargets, setCategoryTargets] = useState({});
   const [time, setTime] = useState(new Date());
 
   useEffect(() => {
@@ -5277,7 +5642,7 @@ function VideoWall3View() {
         ]);
         if (active) {
           setRepairs(data || []);
-          setTargetGiornaliero(settings.targetGiornaliero || 0);
+          setCategoryTargets(settings.categoryTargets || {});
         }
       } catch (e) {
         console.error("VideoWall3 Failed to fetch data:", e);
@@ -5293,25 +5658,7 @@ function VideoWall3View() {
     return () => clearInterval(timer);
   }, []);
 
-  const stats = useMemo(() => {
-    const todayStr = new Date().toDateString();
-    
-    const inLavorazione = repairs.filter(r => r.status === 'In Lavorazione').length;
-    const staging = repairs.filter(r => r.status === 'Staging').length;
-    const lavorate = repairs.filter(r => r.dateStart && new Date(r.dateStart).toDateString() === todayStr).length;
-    const attesaPartiOggi = repairs.filter(r => r.status === 'Attesa Parti' && r.datePartsMissing && new Date(r.datePartsMissing).toDateString() === todayStr).length;
-    const completate = repairs.filter(r => (r.status === 'Riparato' || r.status === 'Spedito') && r.dateOut && new Date(r.dateOut).toDateString() === todayStr).length;
-
-    return {
-      inLavorazione,
-      staging,
-      lavorate,
-      attesaPartiOggi,
-      completate,
-      target: targetGiornaliero,
-      scostamento: completate - targetGiornaliero,
-    };
-  }, [repairs, targetGiornaliero]);
+  const stats = useMemo(() => calculateDailyMetrics(repairs, categoryTargets), [repairs, categoryTargets]);
 
   const formattedDate = time.toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
   const timeString = time.toLocaleTimeString();
@@ -5339,17 +5686,18 @@ function VideoWall3View() {
       </div>
 
       <div className="flex-1 flex flex-col gap-6">
-        {/* ROW 1: 4 CARDS */}
-        <div className="grid grid-cols-4 gap-6 flex-1 min-h-0">
-          <LabCard title="Lavorazioni" value={stats.lavorate} icon={PlayCircle} colorClass="border-slate-500/50 text-slate-400" />
-          <LabCard title="In Corso" value={stats.inLavorazione} icon={Wrench} colorClass="border-indigo-500/50 text-indigo-400" />
-          <LabCard title="Staging" value={stats.staging} icon={LayoutGrid} colorClass="border-cyan-500/50 text-cyan-400" />
-          <LabCard title="Attesa Parte" value={stats.attesaPartiOggi} icon={Clock} colorClass="border-blue-500/50 text-blue-400" />
+        {/* ROW 1: 5 CARDS */}
+        <div className="grid grid-cols-5 gap-6 flex-1 min-h-0">
+          <LabCard title="Lavorazioni (Oggi)" value={stats.lavorate} icon={PlayCircle} colorClass="border-slate-500/50 text-slate-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="In Corso" value={stats.inLavorazione} icon={Wrench} colorClass="border-indigo-500/50 text-indigo-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="Staging (Oggi)" value={stats.stagingOggi} icon={LayoutGrid} colorClass="border-cyan-500/50 text-cyan-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="Attesa Parte (Oggi)" value={stats.attesaPartiOggi} icon={Clock} colorClass="border-blue-500/50 text-blue-400" valueClass="text-6xl xl:text-7xl" />
+          <LabCard title="Completate" value={stats.completateGlobale} icon={CheckCircle} colorClass="border-emerald-500/50 text-emerald-400" valueClass="text-6xl xl:text-7xl" />
         </div>
 
         {/* ROW 2: 2 CARDS */}
         <div className="grid grid-cols-2 gap-6 flex-[1.2] min-h-0">
-          <CompletatePerformanceCard completate={stats.completate} target={stats.target} scostamento={stats.scostamento} />
+          <CategoryGridPerformanceCard categoryPerformances={stats.categoryPerformances} />
           <RepairedTodayCard repairs={repairs} title="Pronti da evadere" />
         </div>
       </div>
