@@ -1995,6 +1995,33 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
   const [isEditingSerial, setIsEditingSerial] = useState(false);
   const [editedSerial, setEditedSerial] = useState(repair.serial || '');
 
+  const [isEditingTag, setIsEditingTag] = useState(false);
+  const [editedTag, setEditedTag] = useState(repair.tag || '');
+
+  const handleSaveTag = async () => {
+    if (editedTag !== repair.tag) {
+      const now = new Date().toLocaleString('it-IT');
+      const user = profile?.email || 'Operatore';
+      const oldTag = repair.tag || 'vuoto';
+      const changeNote = `[${now}]: ${user}, "ha modificato il tag da": ${oldTag} a: ${editedTag}`;
+      const updatedNotes = techNotes ? `${techNotes}\n\n${changeNote}` : changeNote;
+      
+      await service.updateStatus(repair.id, repair.status, { 
+        tag: editedTag,
+        techNotes: updatedNotes
+      });
+      setRepair(prev => ({ ...prev, tag: editedTag, techNotes: updatedNotes }));
+      setTechNotes(updatedNotes);
+    }
+    setIsEditingTag(false);
+  };
+
+  const handleToggleTemplate = async () => {
+    const newTemplate = !repair.template;
+    await service.updateStatus(repair.id, repair.status, { template: newTemplate });
+    setRepair(prev => ({ ...prev, template: newTemplate }));
+  };
+
   const handleSaveSerial = async () => {
     if (editedSerial !== repair.serial) {
       await service.updateStatus(repair.id, repair.status, { serial: editedSerial });
@@ -2155,7 +2182,30 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
               {repair.priorityClaim && <span className="bg-red-100 text-red-600 text-xs font-bold px-2 py-1 rounded border border-red-200 animate-pulse">URGENTE</span>}
             </h1>
             <div className="text-sm text-gray-500 font-mono flex flex-wrap items-center gap-2 md:gap-4 mt-1">
-              {repair.tag && <span className="text-indigo-600 font-bold">TAG: {repair.tag}</span>}
+              {/* TAG with Edit */}
+              <div className="flex items-center gap-2">
+                {isEditingTag ? (
+                  <div className="flex items-center gap-1">
+                    <span className="font-bold text-indigo-600">TAG:</span>
+                    <input
+                      type="text"
+                      value={editedTag}
+                      onChange={(e) => setEditedTag(e.target.value)}
+                      className="w-24 bg-white dark:bg-slate-900 border border-indigo-500 rounded px-1 text-xs py-0.5 outline-none text-indigo-600"
+                      autoFocus
+                    />
+                    <button onClick={handleSaveTag} className="p-1 bg-green-100 text-green-700 rounded hover:bg-green-200"><CheckCircle size={14} /></button>
+                    <button onClick={() => { setIsEditingTag(false); setEditedTag(repair.tag || ''); }} className="p-1 bg-red-100 text-red-700 rounded hover:bg-red-200"><X size={14} /></button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 group">
+                    <span className="text-indigo-600 font-bold">TAG: {repair.tag || '-'}</span>
+                    <button onClick={() => setIsEditingTag(true)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 dark:hover:bg-slate-700 rounded transition-opacity" title="Modifica TAG">
+                      <Edit2 size={12} className="text-gray-400" />
+                    </button>
+                  </div>
+                )}
+              </div>
 
               {/* Serial with Edit */}
               <div className="flex items-center gap-2">
@@ -2510,16 +2560,24 @@ function RepairDetailView({ repair: initialRepair, onClose, load, masterData, on
             {/* ACTIONS */}
             <div className="grid grid-cols-2 gap-4 border-t pt-6 dark:border-slate-700">
               <div className="col-span-2 flex justify-between mb-2 items-center">
-                <button
-                  onClick={() => {
-                    if (confirm('Sei sicuro di voler contrassegnare questo asset come RESO (Non riparabile / Ritirato)? L\'operazione fermerà le metriche e non produrrà alcun punteggio XP.')) {
-                      handleStatusUpdate('Reso');
-                    }
-                  }}
-                  className="text-xs font-bold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 hover:underline px-2 py-1 flex items-center gap-1 transition-colors"
-                >
-                  <RotateCcw size={14} /> Segna come Reso
-                </button>
+                <div className="flex items-center gap-4">
+                  <button
+                    onClick={handleToggleTemplate}
+                    className={`text-xs font-bold px-2 py-1 flex items-center gap-1 transition-colors rounded border ${repair.template ? 'bg-indigo-100 text-indigo-700 border-indigo-300 dark:bg-indigo-900/50 dark:text-indigo-300 dark:border-indigo-700' : 'text-slate-500 hover:text-slate-700 border-transparent hover:bg-slate-100 dark:hover:text-slate-300 dark:hover:bg-slate-800'}`}
+                  >
+                    <FileText size={14} /> Template
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (confirm('Sei sicuro di voler contrassegnare questo asset come RESO (Non riparabile / Ritirato)? L\'operazione fermerà le metriche e non produrrà alcun punteggio XP.')) {
+                        handleStatusUpdate('Reso');
+                      }
+                    }}
+                    className="text-xs font-bold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 hover:underline px-2 py-1 flex items-center gap-1 transition-colors"
+                  >
+                    <RotateCcw size={14} /> Segna come Reso
+                  </button>
+                </div>
                 
                 {(repair.status === 'Ingresso' || repair.status === 'Diagnosi') && (
                   <button
