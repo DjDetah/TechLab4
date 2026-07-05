@@ -22,6 +22,8 @@ import {
 } from "firebase/auth";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import Papa from 'papaparse'; // V4.8 Maglaser Import
+import { jsPDF } from "jspdf";
+import { toPng } from "html-to-image";
 
 // --- GLOBAL DATE FORMATTER (V4.7) ---
 const formatDateTime = (dateString, showTime = true) => {
@@ -5591,6 +5593,392 @@ export const calculateDailyMetrics = (repairs, categoryTargets = {}) => {
   };
 };
 
+// --- NEW V5.8: BACKLOG REPORT PDF TEMPLATE ---
+const BacklogReportTemplate = React.forwardRef(({ repairs = [], snapshots = [], stats = {}, categoryTargets = {}, categories = [] }, ref) => {
+  const todayStrISO = new Date().toISOString().split('T')[0];
+  const sortedSnaps = useMemo(() => [...(snapshots || [])].sort((a,b) => a.date.localeCompare(b.date)), [snapshots]);
+  
+  // Yesterday's snapshot (T-1)
+  const yesterdaySnap = useMemo(() => {
+    return sortedSnaps.slice().reverse().find(s => s.date < todayStrISO) || sortedSnaps[sortedSnaps.length - 1] || null;
+  }, [sortedSnaps, todayStrISO]);
+
+  // 7 days ago snapshot (T-7)
+  const sevenDaysAgoSnap = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    const targetStr = d.toISOString().split('T')[0];
+    return sortedSnaps.find(s => s.date <= targetStr) || sortedSnaps[0] || null;
+  }, [sortedSnaps]);
+
+  // Helper for delta calculation
+  const calcDelta = (currentVal, oldVal, isBadWhenGrowing = true) => {
+    const diff = currentVal - (oldVal || 0);
+    const pct = oldVal ? ((diff / oldVal) * 100).toFixed(1).replace('.', ',') : '0,0';
+    let sign = '';
+    if (diff > 0) sign = '↗ +';
+    else if (diff < 0) sign = '↘ ';
+    else sign = '';
+    
+    let colorClass = 'text-slate-500 font-bold';
+    if (diff !== 0) {
+      if (isBadWhenGrowing) {
+        colorClass = diff > 0 ? 'text-red-600 font-bold' : 'text-green-600 font-bold';
+      } else {
+        colorClass = diff > 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold';
+      }
+    }
+    return { diff, pct, sign, colorClass, text: `${sign}${diff} (${pct}%)` };
+  };
+
+  // KPI 1: Backlog Totale
+  const backlogToday = stats.backlogGlobale || 0;
+  const backlogYesterday = yesterdaySnap?.metrics?.backlogGlobale ?? (yesterdaySnap?.metrics?.ingresso + yesterdaySnap?.metrics?.inLavorazione + yesterdaySnap?.metrics?.stagingTotal + yesterdaySnap?.metrics?.attesaParti) ?? 0;
+  const backlogDelta = calcDelta(backlogToday, backlogYesterday, true);
+  const backlog7Delta = calcDelta(backlogToday, sevenDaysAgoSnap?.metrics?.backlogGlobale ?? 0, true);
+
+  // KPI 2: Attesa Parti
+  const attesaToday = stats.attesaParti || 0;
+  const attesaYesterday = yesterdaySnap?.metrics?.attesaParti ?? 0;
+  const attesaDelta = calcDelta(attesaToday, attesaYesterday, true);
+  const attesa7Delta = calcDelta(attesaToday, sevenDaysAgoSnap?.metrics?.attesaParti ?? 0, true);
+
+  // KPI 3: Completate Oggi
+  const completateToday = stats.completateGlobale || 0;
+  const completateYesterday = yesterdaySnap?.metrics?.completateGlobale ?? 0;
+  const completateDelta = calcDelta(completateToday, completateYesterday, false);
+  
+  // Total Target
+  const totalTarget = useMemo(() => {
+    return Object.values(categoryTargets).reduce((acc, val) => acc + Number(val || 0), 0) || 25;
+  }, [categoryTargets]);
+
+  // Status badge rule for Completate Oggi
+  const getCompletateBadge = (val, target) => {
+    const scostamento = val - target;
+    if (scostamento >= 0) return { label: 'OK', bg: 'bg-green-600' };
+    if (scostamento >= -10) return { label: 'ATTENZIONE', bg: 'bg-orange-500' };
+    return { label: 'CRITICO', bg: 'bg-red-600' };
+  };
+  const completateBadge = getCompletateBadge(completateToday, totalTarget);
+
+  // Status badge rule for Backlog / Attesa
+  const getBacklogBadge = (diffIeri, diff7) => {
+    if (diffIeri > 0 && diff7 > 0) return { label: 'CRITICO', bg: 'bg-red-600' };
+    if (diffIeri > 0 || diff7 > 0) return { label: 'ATTENZIONE', bg: 'bg-orange-500' };
+    return { label: 'OK', bg: 'bg-green-600' };
+  };
+  const backlogBadge = getBacklogBadge(backlogDelta.diff, backlog7Delta.diff);
+  const attesaBadge = getBacklogBadge(attesaDelta.diff, attesa7Delta.diff);
+
+  // Focus PC Portatili
+  const pcPerfToday = useMemo(() => {
+    return stats.categoryPerformances?.find(c => c.category.toUpperCase() === 'PC PORTATILI') || { completate: 0, target: categoryTargets['PC Portatili'] || categoryTargets['PC PORTATILI'] || 25 };
+  }, [stats.categoryPerformances, categoryTargets]);
+  
+  const pcCompletate = pcPerfToday.completate || 0;
+  const pcTarget = pcPerfToday.target || 25;
+  const pcDeltaVal = pcCompletate - pcTarget;
+  
+  const pcYesterdayPerf = yesterdaySnap?.categoryPerformances?.find(c => c.category.toUpperCase() === 'PC PORTATILI');
+  const pcDeltaIeri = calcDelta(pcCompletate, pcYesterdayPerf?.completate ?? 0, false);
+  
+  const pcBadge = getCompletateBadge(pcCompletate, pcTarget);
+
+  // Distribuzione Backlog Table Rows
+  const ingressoToday = stats.ingresso || 0;
+  const ingressoIeri = yesterdaySnap?.metrics?.ingresso ?? 0;
+  const ingresso7 = sevenDaysAgoSnap?.metrics?.ingresso ?? 0;
+  const ingressoDeltaIeri = calcDelta(ingressoToday, ingressoIeri, true);
+  const ingressoDelta7 = calcDelta(ingressoToday, ingresso7, true);
+
+  const preinstallToday = stats.stagingTotal || 0;
+  const preinstallIeri = yesterdaySnap?.metrics?.stagingTotal ?? 0;
+  const preinstall7 = sevenDaysAgoSnap?.metrics?.stagingTotal ?? 0;
+  const preinstallDeltaIeri = calcDelta(preinstallToday, preinstallIeri, true);
+  const preinstallDelta7 = calcDelta(preinstallToday, preinstall7, true);
+
+  const inLavToday = stats.inLavorazione || 0;
+  const inLavIeri = yesterdaySnap?.metrics?.inLavorazione ?? 0;
+  const inLav7 = sevenDaysAgoSnap?.metrics?.inLavorazione ?? 0;
+  const inLavDeltaIeri = calcDelta(inLavToday, inLavIeri, true);
+  const inLavDelta7 = calcDelta(inLavToday, inLav7, true);
+
+  // Sparkline data generator (last 7 snapshots + today)
+  const getSparklineData = (key) => {
+    const last7 = sortedSnaps.slice(-7);
+    const pts = last7.map(s => ({
+      val: s.metrics?.[key] ?? 0
+    }));
+    let todayVal = 0;
+    if (key === 'attesaParti') todayVal = attesaToday;
+    if (key === 'ingresso') todayVal = ingressoToday;
+    if (key === 'stagingTotal') todayVal = preinstallToday;
+    if (key === 'inLavorazione') todayVal = inLavToday;
+    if (key === 'backlogGlobale') todayVal = backlogToday;
+    pts.push({ val: todayVal });
+    return pts;
+  };
+
+  // Trend Chart Data (PC Portatili over last 14 snapshots)
+  const lineChartData = useMemo(() => {
+    const last14 = sortedSnaps.slice(-14);
+    const pts = last14.map(s => {
+      const dateLabel = s.date.split('-').slice(1).join('/');
+      const catPerf = s.categoryPerformances?.find(c => c.category.toUpperCase() === 'PC PORTATILI');
+      return {
+        name: dateLabel,
+        Completate: catPerf ? catPerf.completate : (s.metrics?.completateGlobale || 0),
+        Target: catPerf ? catPerf.target : pcTarget
+      };
+    });
+    const todayDateStr = new Date().toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' });
+    pts.push({
+      name: todayDateStr,
+      Completate: pcCompletate,
+      Target: pcTarget
+    });
+    return pts;
+  }, [sortedSnaps, pcCompletate, pcTarget]);
+
+
+  const formattedReportDate = new Date().toLocaleDateString('it-IT', { day: '2-digit', month: 'long', year: 'numeric' });
+
+  return (
+    <div ref={ref} className="w-[794px] min-h-[1123px] bg-white text-slate-800 p-8 font-sans box-border select-none relative flex flex-col justify-between" style={{ width: '794px', minHeight: '1123px' }}>
+      <div>
+        {/* HEADER */}
+        <div className="flex justify-between items-start border-b-2 border-blue-600 pb-4 mb-6">
+          <div>
+            <h1 className="text-3xl font-black text-slate-900 tracking-tight uppercase leading-none mb-1">REPORT BACKLOG LABORATORIO</h1>
+            <div className="text-slate-600 font-bold text-sm">Aggiornamento del <span className="text-blue-600">{formattedReportDate}</span></div>
+          </div>
+          <div className="flex flex-col items-end">
+            <img src="/mvs-logo.png" alt="MVS Logo" className="h-14 w-auto object-contain mb-1" />
+            <span className="text-[10px] italic font-semibold text-amber-500 tracking-wider">Getting Better</span>
+          </div>
+        </div>
+
+        {/* SECTION 1: PANORAMICA GENERALE */}
+        <div className="mb-6">
+          <h2 className="text-blue-900 font-black text-sm uppercase tracking-wider text-center mb-3">PANORAMICA GENERALE</h2>
+          <div className="grid grid-cols-3 gap-4">
+            {/* CARD 1: BACKLOG TOTALE */}
+            <div className="border border-slate-200 rounded-2xl p-4 flex flex-col items-center justify-between bg-slate-50/30 shadow-sm relative overflow-hidden">
+              <span className="text-slate-700 font-bold text-xs uppercase tracking-wider text-center mb-2">BACKLOG TOTALE</span>
+              <div className="flex items-center gap-3 my-2">
+                <Package className="text-blue-500 shrink-0" size={36} />
+                <span className="text-5xl font-black text-blue-600 tracking-tight">{backlogToday}</span>
+              </div>
+              <div className="text-xs font-medium text-slate-500 mb-3">
+                Trend (vs ieri): <span className={backlogDelta.colorClass}>{backlogDelta.text}</span>
+              </div>
+              <div className={`${backlogBadge.bg} text-white font-black text-[11px] px-5 py-1 rounded-full uppercase tracking-wider shadow-sm`}>
+                {backlogBadge.label}
+              </div>
+            </div>
+
+            {/* CARD 2: ATTESA PARTI */}
+            <div className="border border-slate-200 rounded-2xl p-4 flex flex-col items-center justify-between bg-slate-50/30 shadow-sm relative overflow-hidden">
+              <span className="text-slate-700 font-bold text-xs uppercase tracking-wider text-center mb-2">ATTESA PARTI</span>
+              <div className="flex items-center gap-3 my-2">
+                <Clock className="text-orange-500 shrink-0" size={36} />
+                <span className="text-5xl font-black text-orange-500 tracking-tight">{attesaToday}</span>
+              </div>
+              <div className="text-xs font-medium text-slate-500 mb-3">
+                Trend (vs ieri): <span className={attesaDelta.colorClass}>{attesaDelta.text}</span>
+              </div>
+              <div className={`${attesaBadge.bg} text-white font-black text-[11px] px-5 py-1 rounded-full uppercase tracking-wider shadow-sm`}>
+                {attesaBadge.label}
+              </div>
+            </div>
+
+            {/* CARD 3: COMPLETATE OGGI */}
+            <div className="border border-slate-200 rounded-2xl p-4 flex flex-col items-center justify-between bg-slate-50/30 shadow-sm relative overflow-hidden">
+              <span className="text-slate-700 font-bold text-xs uppercase tracking-wider text-center mb-2">COMPLETATE OGGI</span>
+              <div className="flex items-center gap-3 my-2">
+                <CheckCircle className="text-green-600 shrink-0" size={36} />
+                <span className="text-5xl font-black text-green-600 tracking-tight">{completateToday}</span>
+              </div>
+              <div className="text-slate-500 text-xs text-center font-medium my-1 border-b border-slate-200 pb-1 w-full">
+                Target giornaliero: <span className="font-bold text-slate-700">{totalTarget}</span>
+              </div>
+              <div className="text-xs font-medium text-slate-500 mb-3">
+                Trend (vs ieri): <span className={completateDelta.colorClass}>{completateDelta.text}</span>
+              </div>
+              <div className={`${completateBadge.bg} text-white font-black text-[11px] px-5 py-1 rounded-full uppercase tracking-wider shadow-sm`}>
+                {completateBadge.label}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 2: FOCUS PC PORTATILI */}
+        <div className="mb-6">
+          <div className="border-2 border-red-500 rounded-2xl p-5 relative bg-white shadow-sm mt-3">
+            <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-white px-4 text-blue-900 font-black text-sm uppercase tracking-wider">
+              FOCUS: PC PORTATILI
+            </span>
+            <div className="grid grid-cols-4 gap-4 pt-1 items-center">
+              <div className="flex flex-col items-center justify-center border-r border-slate-100">
+                <span className="text-xs uppercase font-bold text-slate-600 mb-1">COMPLETATE</span>
+                <span className="text-4xl font-black text-slate-800">{pcCompletate}</span>
+                <span className="text-[11px] text-slate-500 mt-1">Trend: <span className={pcDeltaIeri.colorClass}>{pcDeltaIeri.text}</span></span>
+              </div>
+              <div className="flex flex-col items-center justify-center border-r border-slate-100">
+                <span className="text-xs uppercase font-bold text-slate-600 mb-1">TARGET</span>
+                <span className="text-4xl font-black text-blue-600">{pcTarget}</span>
+                <span className="text-[11px] text-slate-500 mt-1">Target giornaliero</span>
+              </div>
+              <div className="flex flex-col items-center justify-center border-r border-slate-100">
+                <span className="text-xs uppercase font-bold text-slate-600 mb-1">DELTA</span>
+                <span className={`text-4xl font-black ${pcDeltaVal >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {pcDeltaVal > 0 ? `+${pcDeltaVal}` : pcDeltaVal}
+                </span>
+                <span className="text-[11px] text-slate-500 mt-1">Scostamento dal target</span>
+              </div>
+              <div className="flex flex-col items-center justify-center">
+                <span className="text-xs uppercase font-bold text-slate-600 mb-1">STATO</span>
+                <div className={`w-7 h-7 rounded-full mb-1 ${pcBadge.label === 'OK' ? 'bg-green-600' : pcBadge.label === 'ATTENZIONE' ? 'bg-orange-500' : 'bg-red-600'}`}></div>
+                <span className={`font-black text-xs uppercase ${pcBadge.label === 'OK' ? 'text-green-600' : pcBadge.label === 'ATTENZIONE' ? 'text-orange-500' : 'text-red-600'}`}>
+                  {pcBadge.label}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 3: DISTRIBUZIONE BACKLOG */}
+        <div className="mb-6">
+          <h2 className="text-blue-900 font-black text-sm uppercase tracking-wider text-center mb-3">DISTRIBUZIONE BACKLOG</h2>
+          <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+            <table className="w-full text-xs text-left border-collapse">
+              <thead>
+                <tr className="bg-blue-50/60 text-blue-900 uppercase font-bold border-b-2 border-blue-200">
+                  <th className="py-2.5 px-4">CATEGORIA</th>
+                  <th className="py-2.5 px-3 text-center">VALORE OGGI</th>
+                  <th className="py-2.5 px-3 text-center">TREND (ULTIMI 7 GIORNI)</th>
+                  <th className="py-2.5 px-3 text-center">VARIAZIONE vs IERI</th>
+                  <th className="py-2.5 px-3 text-center">VARIAZIONE vs 7 GIORNI FA</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-medium">
+                {/* Attesa Parti */}
+                <tr className="hover:bg-slate-50/50">
+                  <td className="py-2 px-4 flex items-center gap-2 font-bold text-slate-700">
+                    <Clock size={16} className="text-orange-500 shrink-0" /> Attesa Parti
+                  </td>
+                  <td className="py-2 px-3 text-center font-black text-sm text-orange-500">{attesaToday}</td>
+                  <td className="py-1 px-3 text-center">
+                    <div className="w-[100px] h-[26px] mx-auto">
+                      <AreaChart width={100} height={26} data={getSparklineData('attesaParti')} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
+                        <Area type="monotone" dataKey="val" stroke="#f97316" fill="#ffedd5" strokeWidth={2} />
+                      </AreaChart>
+                    </div>
+                  </td>
+                  <td className={`py-2 px-3 text-center ${attesaDelta.colorClass}`}>{attesaDelta.text}</td>
+                  <td className={`py-2 px-3 text-center ${attesa7Delta.colorClass}`}>{attesa7Delta.text}</td>
+                </tr>
+
+                {/* Ingresso */}
+                <tr className="hover:bg-slate-50/50">
+                  <td className="py-2 px-4 flex items-center gap-2 font-bold text-slate-700">
+                    <Package size={16} className="text-blue-500 shrink-0" /> Ingresso
+                  </td>
+                  <td className="py-2 px-3 text-center font-black text-sm text-blue-600">{ingressoToday}</td>
+                  <td className="py-1 px-3 text-center">
+                    <div className="w-[100px] h-[26px] mx-auto">
+                      <AreaChart width={100} height={26} data={getSparklineData('ingresso')} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
+                        <Area type="monotone" dataKey="val" stroke="#3b82f6" fill="#dbeafe" strokeWidth={2} />
+                      </AreaChart>
+                    </div>
+                  </td>
+                  <td className={`py-2 px-3 text-center ${ingressoDeltaIeri.colorClass}`}>{ingressoDeltaIeri.text}</td>
+                  <td className={`py-2 px-3 text-center ${ingressoDelta7.colorClass}`}>{ingressoDelta7.text}</td>
+                </tr>
+
+                {/* Preinstall */}
+                <tr className="hover:bg-slate-50/50">
+                  <td className="py-2 px-4 flex items-center gap-2 font-bold text-slate-700">
+                    <LayoutGrid size={16} className="text-purple-500 shrink-0" /> Preinstall
+                  </td>
+                  <td className="py-2 px-3 text-center font-black text-sm text-purple-600">{preinstallToday}</td>
+                  <td className="py-1 px-3 text-center">
+                    <div className="w-[100px] h-[26px] mx-auto">
+                      <AreaChart width={100} height={26} data={getSparklineData('stagingTotal')} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
+                        <Area type="monotone" dataKey="val" stroke="#a855f7" fill="#f3e8ff" strokeWidth={2} />
+                      </AreaChart>
+                    </div>
+                  </td>
+                  <td className={`py-2 px-3 text-center ${preinstallDeltaIeri.colorClass}`}>{preinstallDeltaIeri.text}</td>
+                  <td className={`py-2 px-3 text-center ${preinstallDelta7.colorClass}`}>{preinstallDelta7.text}</td>
+                </tr>
+
+                {/* In Lavorazione */}
+                <tr className="hover:bg-slate-50/50">
+                  <td className="py-2 px-4 flex items-center gap-2 font-bold text-slate-700">
+                    <Wrench size={16} className="text-emerald-500 shrink-0" /> In Lavorazione
+                  </td>
+                  <td className="py-2 px-3 text-center font-black text-sm text-emerald-600">{inLavToday}</td>
+                  <td className="py-1 px-3 text-center">
+                    <div className="w-[100px] h-[26px] mx-auto">
+                      <AreaChart width={100} height={26} data={getSparklineData('inLavorazione')} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
+                        <Area type="monotone" dataKey="val" stroke="#10b981" fill="#d1fae5" strokeWidth={2} />
+                      </AreaChart>
+                    </div>
+                  </td>
+                  <td className={`py-2 px-3 text-center ${inLavDeltaIeri.colorClass}`}>{inLavDeltaIeri.text}</td>
+                  <td className={`py-2 px-3 text-center ${inLavDelta7.colorClass}`}>{inLavDelta7.text}</td>
+                </tr>
+
+                {/* TOTALE BACKLOG */}
+                <tr className="bg-blue-50/40 font-black border-t-2 border-blue-200">
+                  <td className="py-2.5 px-4 text-slate-800 uppercase">TOTALE BACKLOG</td>
+                  <td className="py-2.5 px-3 text-center text-base text-blue-700">{backlogToday}</td>
+                  <td className="py-1 px-3 text-center">
+                    <div className="w-[100px] h-[26px] mx-auto">
+                      <AreaChart width={100} height={26} data={getSparklineData('backlogGlobale')} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
+                        <Area type="monotone" dataKey="val" stroke="#1d4ed8" fill="#bfdbfe" strokeWidth={2} />
+                      </AreaChart>
+                    </div>
+                  </td>
+                  <td className={`py-2.5 px-3 text-center ${backlogDelta.colorClass}`}>{backlogDelta.text}</td>
+                  <td className={`py-2.5 px-3 text-center ${backlog7Delta.colorClass}`}>{backlog7Delta.text}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* SECTION 4: TREND COMPLETATE PC PORTATILI vs TARGET */}
+        <div className="mb-4">
+          <h2 className="text-blue-900 font-black text-sm uppercase tracking-wider text-center mb-1">
+            TREND COMPLETATE PC PORTATILI vs TARGET
+          </h2>
+          <div className="flex justify-center items-center gap-6 text-[11px] font-bold text-slate-600 mb-2">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-blue-600 inline-block"></span> Completate</span>
+            <span className="flex items-center gap-1.5"><span className="w-6 h-[2px] border-b-2 border-dashed border-slate-400 inline-block"></span> Target Giornaliero ({pcTarget})</span>
+          </div>
+          <div className="w-full h-[140px] bg-slate-50/50 rounded-2xl border border-slate-200 p-2">
+            <LineChart width={730} height={140} data={lineChartData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+              <XAxis dataKey="name" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+              <YAxis stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+              <Line type="monotone" dataKey="Completate" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 3, fill: '#2563eb', strokeWidth: 0 }} />
+              <Line type="step" dataKey="Target" stroke="#94a3b8" strokeWidth={2} strokeDasharray="4 4" dot={false} />
+            </LineChart>
+          </div>
+        </div>
+      </div>
+
+      {/* FOOTER */}
+      <div className="text-center text-slate-400 text-xs border-t border-slate-200 pt-3 flex items-center justify-center gap-2 font-semibold">
+        <Award size={14} className="text-blue-500" /> MVS TechLab Daily Report
+      </div>
+    </div>
+  );
+});
+
 // --- FEATURES: VIDEOWALL LAB (V5.5) ---
 function VideoWallLabView() {
   const [repairs, setRepairs] = useState([]);
@@ -5598,6 +5986,9 @@ function VideoWallLabView() {
   const [categories, setCategories] = useState([]);
   const [snapshots, setSnapshots] = useState([]);
   const [time, setTime] = useState(new Date());
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [generatingPdf, setGeneratingPdf] = useState(false);
+  const reportTemplateRef = useRef(null);
 
   useEffect(() => {
     let active = true;
@@ -5633,13 +6024,92 @@ function VideoWallLabView() {
   const formattedDate = time.toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
   const timeString = time.toLocaleTimeString();
 
+  const handleOpenAndSaveSnapshot = async () => {
+    setShowReportModal(true);
+    try {
+      const dateStr = new Date().toISOString().split('T')[0];
+      const snapshotData = {
+        date: dateStr,
+        timestamp: Date.now(),
+        metrics: {
+          ingresso: stats.ingresso,
+          ingressoOggi: stats.ingressoOggi,
+          inLavorazione: stats.inLavorazione,
+          attesaParti: stats.attesaParti,
+          attesaPartiOggi: stats.attesaPartiOggi,
+          stagingTotal: stats.stagingTotal,
+          stagingOggi: stats.stagingOggi,
+          lavorate: stats.lavorate,
+          completateGlobale: stats.completateGlobale,
+          backlogGlobale: stats.backlogGlobale
+        },
+        categoryPerformances: stats.categoryPerformances
+      };
+      await service.saveDailySnapshot(snapshotData);
+      setSnapshots(prev => {
+        const filtered = prev.filter(s => s.date !== dateStr);
+        return [...filtered, snapshotData];
+      });
+      console.log("Snapshot odierno salvato automaticamente all'apertura del report!");
+    } catch (err) {
+      console.error("Errore nel salvataggio automatico dello snapshot:", err);
+    }
+  };
+
+  const generateAndHandlePdf = async (action = 'save') => {
+    if (!reportTemplateRef.current) return;
+    try {
+      setGeneratingPdf(true);
+      const dataUrl = await toPng(reportTemplateRef.current, {
+        quality: 0.98,
+        pixelRatio: 2,
+        backgroundColor: '#ffffff'
+      });
+      
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+      
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      
+      pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      
+      const dateStr = new Date().toISOString().split('T')[0];
+      const fileName = `MVS_TechLab_Daily_Report_${dateStr}.pdf`;
+      
+      if (action === 'save') {
+        pdf.save(fileName);
+      } else if (action === 'open') {
+        const blob = pdf.output('blob');
+        const blobUrl = URL.createObjectURL(blob);
+        window.open(blobUrl, '_blank');
+      }
+      setShowReportModal(false);
+    } catch (error) {
+      console.error("Errore durante la generazione del PDF:", error);
+      alert("Si è verificato un errore durante la generazione del PDF. Controlla la console.");
+    } finally {
+      setGeneratingPdf(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-900 text-white p-6 font-sans overflow-hidden flex flex-col">
       {/* HEADER */}
       <div className="flex justify-between items-center mb-8 px-2">
         <div className="flex items-center gap-6">
-          <div className="bg-white/10 p-3 rounded-[2rem] border border-white/10 shadow-[0_0_40px_rgba(255,255,255,0.05)] backdrop-blur-md h-20 xl:h-24 flex items-center justify-center overflow-hidden">
+          <div 
+            onClick={handleOpenAndSaveSnapshot}
+            className="bg-white/10 p-3 rounded-[2rem] border border-white/10 shadow-[0_0_40px_rgba(255,255,255,0.05)] backdrop-blur-md h-20 xl:h-24 flex items-center justify-center overflow-hidden cursor-pointer hover:bg-white/20 hover:scale-105 transition-all group relative"
+            title="Clicca per generare Report PDF"
+          >
             <img src="/mvs-logo.png" alt="MVS Logo" className="h-full w-auto object-contain" />
+            <div className="absolute inset-0 bg-blue-500/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-[2rem]">
+              <FileText size={28} className="text-white animate-bounce" />
+            </div>
           </div>
           <div>
             <h1 className="text-5xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 mb-1">TECHLAB</h1>
@@ -5680,6 +6150,61 @@ function VideoWallLabView() {
           </div>
         </div>
       </div>
+
+      {/* HIDDEN / OFFSCREEN REPORT TEMPLATE FOR CAPTURE */}
+      <div style={{ position: 'absolute', left: '-9999px', top: 0, zIndex: -1000, pointerEvents: 'none' }}>
+        <BacklogReportTemplate
+          ref={reportTemplateRef}
+          repairs={repairs}
+          snapshots={snapshots}
+          stats={stats}
+          categoryTargets={categoryTargets}
+          categories={categories}
+        />
+      </div>
+
+      {/* REPORT GENERATION MODAL */}
+      {showReportModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="bg-slate-800 border border-slate-700 rounded-3xl p-8 max-w-lg w-full shadow-2xl flex flex-col items-center text-center relative">
+            <button
+              onClick={() => setShowReportModal(false)}
+              className="absolute top-6 right-6 p-2 text-slate-400 hover:text-white rounded-full hover:bg-slate-700 transition-colors"
+            >
+              <X size={24} />
+            </button>
+            
+            <div className="bg-blue-500/20 p-4 rounded-2xl text-blue-400 mb-6 border border-blue-500/30">
+              <FileText size={48} />
+            </div>
+            
+            <h2 className="text-2xl font-black text-white mb-2">Genera Report PDF</h2>
+            <p className="text-slate-400 text-sm mb-8 leading-relaxed">
+              Il report **MVS TechLab Daily Report** è pronto per essere generato in formato A4 ad alta risoluzione. Include i KPI odierni, il focus PC Portatili, i grafici di trend e l'analisi automatica.
+            </p>
+            
+            <div className="flex flex-col sm:flex-row gap-4 w-full">
+              <button
+                onClick={() => generateAndHandlePdf('open')}
+                disabled={generatingPdf}
+                className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+              >
+                {generatingPdf ? <Activity className="animate-spin" size={20} /> : <ExternalLink size={20} />}
+                Apri Anteprima
+              </button>
+              
+              <button
+                onClick={() => generateAndHandlePdf('save')}
+                disabled={generatingPdf}
+                className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-blue-600/30 transition-all disabled:opacity-50"
+              >
+                {generatingPdf ? <Activity className="animate-spin" size={20} /> : <Download size={20} />}
+                Scarica PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
