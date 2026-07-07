@@ -5986,7 +5986,6 @@ function VideoWallLabView() {
   const [categories, setCategories] = useState([]);
   const [snapshots, setSnapshots] = useState([]);
   const [time, setTime] = useState(new Date());
-  const [showReportModal, setShowReportModal] = useState(false);
   const [generatingPdf, setGeneratingPdf] = useState(false);
   const reportTemplateRef = useRef(null);
 
@@ -6024,9 +6023,12 @@ function VideoWallLabView() {
   const formattedDate = time.toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
   const timeString = time.toLocaleTimeString();
 
-  const handleOpenAndSaveSnapshot = async () => {
-    setShowReportModal(true);
+  const handleLogoClickAndDownload = async () => {
+    if (generatingPdf || !reportTemplateRef.current) return;
     try {
+      setGeneratingPdf(true);
+      
+      // 1. Salva automaticamente lo snapshot odierno in Firestore / localStorage
       const dateStr = new Date().toISOString().split('T')[0];
       const snapshotData = {
         date: dateStr,
@@ -6050,16 +6052,9 @@ function VideoWallLabView() {
         const filtered = prev.filter(s => s.date !== dateStr);
         return [...filtered, snapshotData];
       });
-      console.log("Snapshot odierno salvato automaticamente all'apertura del report!");
-    } catch (err) {
-      console.error("Errore nel salvataggio automatico dello snapshot:", err);
-    }
-  };
+      console.log("Snapshot odierno salvato automaticamente all'avvio del download report!");
 
-  const generateAndHandlePdf = async (action = 'save') => {
-    if (!reportTemplateRef.current) return;
-    try {
-      setGeneratingPdf(true);
+      // 2. Genera il binario del PDF in memoria e triggera il download locale diretto nel browser (emula Content-Disposition: attachment)
       const dataUrl = await toPng(reportTemplateRef.current, {
         quality: 0.98,
         pixelRatio: 2,
@@ -6077,19 +6072,12 @@ function VideoWallLabView() {
       
       pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight);
       
-      const dateStr = new Date().toISOString().split('T')[0];
       const fileName = `MVS_TechLab_Daily_Report_${dateStr}.pdf`;
       
-      if (action === 'save') {
-        pdf.save(fileName);
-      } else if (action === 'open') {
-        const blob = pdf.output('blob');
-        const blobUrl = URL.createObjectURL(blob);
-        window.open(blobUrl, '_blank');
-      }
-      setShowReportModal(false);
+      // Salva il file come allegato binario scaricato direttamente dal browser
+      pdf.save(fileName);
     } catch (error) {
-      console.error("Errore durante la generazione del PDF:", error);
+      console.error("Errore durante il download del PDF:", error);
       alert("Si è verificato un errore durante la generazione del PDF. Controlla la console.");
     } finally {
       setGeneratingPdf(false);
@@ -6102,13 +6090,17 @@ function VideoWallLabView() {
       <div className="flex justify-between items-center mb-8 px-2">
         <div className="flex items-center gap-6">
           <div 
-            onClick={handleOpenAndSaveSnapshot}
-            className="bg-white/10 p-3 rounded-[2rem] border border-white/10 shadow-[0_0_40px_rgba(255,255,255,0.05)] backdrop-blur-md h-20 xl:h-24 flex items-center justify-center overflow-hidden cursor-pointer hover:bg-white/20 hover:scale-105 transition-all group relative"
-            title="Clicca per generare Report PDF"
+            onClick={handleLogoClickAndDownload}
+            className={`bg-white/10 p-3 rounded-[2rem] border border-white/10 shadow-[0_0_40px_rgba(255,255,255,0.05)] backdrop-blur-md h-20 xl:h-24 flex items-center justify-center overflow-hidden cursor-pointer hover:bg-white/20 hover:scale-105 transition-all group relative ${generatingPdf ? 'pointer-events-none opacity-80' : ''}`}
+            title="Clicca per scaricare direttamente il Report PDF odierno"
           >
             <img src="/mvs-logo.png" alt="MVS Logo" className="h-full w-auto object-contain" />
-            <div className="absolute inset-0 bg-blue-500/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-[2rem]">
-              <FileText size={28} className="text-white animate-bounce" />
+            <div className="absolute inset-0 bg-blue-500/30 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-[2rem]">
+              {generatingPdf ? (
+                <Activity size={28} className="text-white animate-spin" />
+              ) : (
+                <Download size={28} className="text-white animate-bounce" />
+              )}
             </div>
           </div>
           <div>
@@ -6162,49 +6154,6 @@ function VideoWallLabView() {
           categories={categories}
         />
       </div>
-
-      {/* REPORT GENERATION MODAL */}
-      {showReportModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-fade-in">
-          <div className="bg-slate-800 border border-slate-700 rounded-3xl p-8 max-w-lg w-full shadow-2xl flex flex-col items-center text-center relative">
-            <button
-              onClick={() => setShowReportModal(false)}
-              className="absolute top-6 right-6 p-2 text-slate-400 hover:text-white rounded-full hover:bg-slate-700 transition-colors"
-            >
-              <X size={24} />
-            </button>
-            
-            <div className="bg-blue-500/20 p-4 rounded-2xl text-blue-400 mb-6 border border-blue-500/30">
-              <FileText size={48} />
-            </div>
-            
-            <h2 className="text-2xl font-black text-white mb-2">Genera Report PDF</h2>
-            <p className="text-slate-400 text-sm mb-8 leading-relaxed">
-              Il report **MVS TechLab Daily Report** è pronto per essere generato in formato A4 ad alta risoluzione. Include i KPI odierni, il focus PC Portatili, i grafici di trend e l'analisi automatica.
-            </p>
-            
-            <div className="flex flex-col sm:flex-row gap-4 w-full">
-              <button
-                onClick={() => generateAndHandlePdf('open')}
-                disabled={generatingPdf}
-                className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-              >
-                {generatingPdf ? <Activity className="animate-spin" size={20} /> : <ExternalLink size={20} />}
-                Apri Anteprima
-              </button>
-              
-              <button
-                onClick={() => generateAndHandlePdf('save')}
-                disabled={generatingPdf}
-                className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-blue-600/30 transition-all disabled:opacity-50"
-              >
-                {generatingPdf ? <Activity className="animate-spin" size={20} /> : <Download size={20} />}
-                Scarica PDF
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
